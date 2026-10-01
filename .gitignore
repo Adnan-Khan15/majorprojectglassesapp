@@ -1,0 +1,19 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+*.iml
+.txt
+
+# Android
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.apk
+*.aab
+*.keystore
+
+# PlatformIO
+esp32-firmware/.pio/
+android-app/.kotlin/
