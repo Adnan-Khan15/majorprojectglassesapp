@@ -5,9 +5,14 @@
 #include <NimBLEDevice.h>
 #include "glasses_protocol.h"
 
-// Glasses push-button: wired between this pin and GND (internal pull-up).
-// D0 = GPIO1 on the XIAO ESP32S3. Change if the button is wired elsewhere.
+// Pin map matches the existing CameraBLE bring-up sketch:
+// push-button drives D0 HIGH when pressed (internal pull-down), LED on D8.
 static constexpr int BUTTON_PIN = D0;
+static constexpr int LED_PIN = D8;
+// Unused header pins are pulled down so they can't float and pick up noise,
+// as in the bring-up sketch. D4/D5 (I2C for the VL53L1X) and the I2S speaker
+// pins must come off this list when those parts are wired in later phases.
+static constexpr int UNUSED_PINS[] = {D1, D2, D3, D4, D5, D6};
 static constexpr uint32_t DEBOUNCE_MS = 40;
 
 static NimBLEServer* server = nullptr;
@@ -91,21 +96,24 @@ static void setupBle() {
 }
 
 static bool buttonPressed() {
-    static bool lastStable = HIGH, lastRead = HIGH;
+    static bool lastStable = LOW, lastRead = LOW;
     static uint32_t changedAt = 0;
     bool r = digitalRead(BUTTON_PIN);
     if (r != lastRead) { lastRead = r; changedAt = millis(); }
     if (millis() - changedAt > DEBOUNCE_MS && r != lastStable) {
         lastStable = r;
-        return r == LOW;  // falling edge = press
+        return r == HIGH;  // rising edge = press
     }
     return false;
 }
 
 static void sendPing() {
     Serial.printf("[BTN] button pressed at %lu ms\n", (unsigned long)millis());
+    digitalWrite(LED_PIN, HIGH);  // brief blink: the press was seen
     if (!clientConnected || !controlSubscribed) {
         Serial.printf("[BTN] not sent: connected=%d subscribed=%d\n", clientConnected, controlSubscribed);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
         return;
     }
     char msg[48];
@@ -114,13 +122,18 @@ static void sendPing() {
     controlChar->setValue((uint8_t*)msg, strlen(msg));
     bool ok = controlChar->indicate();
     Serial.printf("[BLE] string sent on CONTROL: \"%s\" -> %s\n", msg, ok ? "queued" : "FAILED");
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
 }
 
 void setup() {
     Serial.begin(115200);
     delay(1500);  // let USB CDC enumerate so early logs aren't lost
     Serial.println("\n[SYS] SmartGlasses firmware - Phase 1 (BLE link test)");
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_PIN, INPUT_PULLDOWN);
+    for (int pin : UNUSED_PINS) pinMode(pin, INPUT_PULLDOWN);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
     setupBle();
 }
 

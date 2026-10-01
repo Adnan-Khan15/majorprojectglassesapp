@@ -17,3 +17,7 @@ android-app/local.properties
 # PlatformIO
 esp32-firmware/.pio/
 android-app/.kotlin/
+CameraBLE.zip
+
+# 2.6 GB model: fetched by scripts/fetch-model.sh, never committed
+android-app/app/src/main/assets/models/

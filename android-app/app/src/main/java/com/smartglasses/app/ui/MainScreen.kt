@@ -39,26 +39,25 @@ fun MainScreen() {
     val last by link.lastReceived.collectAsStateWithLifecycle()
 
     Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.safeDrawingPadding().padding(16.dp)) {
-            Text("Glasses", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.size(12.dp))
-            ConnectionBanner(state)
-            Spacer(Modifier.size(12.dp))
-            LastReceivedCard(last)
-            Spacer(Modifier.size(16.dp))
-            Text("Link log", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.size(8.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(log) { line ->
-                    Row {
-                        Text(line.time, fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(8.dp))
-                        Text(line.text, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                    }
+        LazyColumn(
+            Modifier.safeDrawingPadding().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            item { Spacer(Modifier.size(16.dp)); Text("Glasses", style = MaterialTheme.typography.headlineMedium) }
+            item { Spacer(Modifier.size(8.dp)); ConnectionBanner(state) }
+            item { Spacer(Modifier.size(8.dp)); ModelSection() }
+            item { Spacer(Modifier.size(8.dp)); LastReceivedCard(last) }
+            item { Spacer(Modifier.size(12.dp)); Text("Link log", style = MaterialTheme.typography.titleMedium) }
+            items(log) { line ->
+                Row {
+                    Text(line.time, fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(8.dp))
+                    Text(line.text, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                 }
             }
+            item { Spacer(Modifier.size(24.dp)) }
         }
     }
 }
