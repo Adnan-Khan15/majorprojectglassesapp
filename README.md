@@ -79,7 +79,7 @@ The current release is **Phase 1**: a Bluetooth link test between the app and th
 
 **Requirements:** an Android phone running **Android 12 or newer** with Bluetooth.
 
-1. On your phone, open the **[Releases page](../../releases/latest)** and download **`SmartGlasses-phase1.apk`**.
+1. On your phone, tap **[⬇ Download SmartGlasses-phase1.apk](https://github.com/Adnan-Khan15/majorprojectglassesapp/releases/latest/download/SmartGlasses-phase1.apk)** (about 41 MB), or find it on the [Releases page](../../releases/latest).
 2. Open the downloaded file. Android will warn about installing from an unknown source:
    - Tap **Settings**, turn on **Allow from this source** for your browser or Files app, then go back.
    - Tap **Install**.
