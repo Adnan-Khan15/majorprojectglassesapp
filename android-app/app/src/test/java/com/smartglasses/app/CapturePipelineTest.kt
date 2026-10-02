@@ -15,7 +15,10 @@ class CapturePipelineTest {
 
     private var clock = 0L
     private val assembler = ImageAssembler { clock }
-    private val jpeg = javaClass.classLoader!!.getResourceAsStream("pens.jpg")!!.readBytes()
+    // ~30 KB, the size of a VGA capture, framed by the JPEG start/end markers the assembler checks.
+    private val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte()) +
+        java.util.Random(42).let { r -> ByteArray(30_000).also(r::nextBytes) } +
+        byteArrayOf(0xFF.toByte(), 0xD9.toByte())
 
     private fun header(size: Int, distanceMm: Int): ByteArray =
         ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).putInt(size).putShort(distanceMm.toShort()).array()
