@@ -6,8 +6,14 @@ import java.util.UUID
 object GlassesProtocol {
     const val DEVICE_NAME = "SmartGlasses"
     val SERVICE: UUID = UUID.fromString("6e1a0001-4b7d-4f2a-9c3e-5a1b2c3d4e5f")
+    /** ESP32 -> phone, indicate: {uint32 jpegSize LE, uint16 distanceMm LE}; 0 mm = no reading. */
     val CONTROL: UUID = UUID.fromString("6e1a0002-4b7d-4f2a-9c3e-5a1b2c3d4e5f")
+    /** ESP32 -> phone, indicate: the JPEG in ordered (MTU - 3)-byte chunks. */
     val IMAGE_DATA: UUID = UUID.fromString("6e1a0003-4b7d-4f2a-9c3e-5a1b2c3d4e5f")
+    /** phone -> ESP32, write: UTF-8 sentence to speak. */
     val RESULT_TEXT: UUID = UUID.fromString("6e1a0004-4b7d-4f2a-9c3e-5a1b2c3d4e5f")
     const val MAX_MTU = 517
+    const val CONTROL_HEADER_LEN = 6
+    /** Sanity cap; a VGA JPEG is ~20-60 KB. */
+    const val MAX_IMAGE_BYTES = 2L * 1024 * 1024
 }

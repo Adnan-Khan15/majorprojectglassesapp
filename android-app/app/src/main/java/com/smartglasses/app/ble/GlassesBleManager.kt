@@ -14,6 +14,7 @@ import no.nordicsemi.android.ble.ktx.suspend
 class GlassesBleManager(
     context: Context,
     private val onControl: (ByteArray) -> Unit,
+    private val onImageChunk: (ByteArray) -> Unit,
     private val onLog: (String) -> Unit,
 ) : BleManager(context) {
 
@@ -39,6 +40,7 @@ class GlassesBleManager(
             .enqueue()
         requestConnectionPriority(ConnectionPriorityRequest.CONNECTION_PRIORITY_HIGH).enqueue()
         setIndicationCallback(control).with { _, data -> data.value?.let(onControl) }
+        setIndicationCallback(imageData).with { _, data -> data.value?.let(onImageChunk) }
         enableIndications(control).enqueue()
         enableIndications(imageData).enqueue()
     }

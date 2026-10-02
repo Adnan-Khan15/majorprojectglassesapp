@@ -14,7 +14,10 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -43,9 +46,6 @@ sealed interface LinkState {
 
 data class LogLine(val time: String, val text: String)
 
-/** Exact string last received from the glasses on CONTROL, for on-screen verification. */
-data class ReceivedMessage(val time: String, val text: String, val echoMs: Long? = null, val echoError: String? = null)
-
 /**
  * Owns the glasses connection for the whole process lifetime (not tied to any
  * Activity), so rotation/backgrounding never drops it. Runs a supervise loop:
@@ -67,8 +67,12 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     private val _log = MutableStateFlow<List<LogLine>>(emptyList())
     val log: StateFlow<List<LogLine>> = _log.asStateFlow()
 
-    private val _lastReceived = MutableStateFlow<ReceivedMessage?>(null)
-    val lastReceived: StateFlow<ReceivedMessage?> = _lastReceived.asStateFlow()
+    private val _captures = MutableSharedFlow<CaptureEvent>(extraBufferCapacity = 256)
+    /** Photos arriving from the glasses (header, progress, completed image or failure). */
+    val captures: SharedFlow<CaptureEvent> = _captures.asSharedFlow()
+
+    private val assembler = ImageAssembler { SystemClock.elapsedRealtime() }
+    private var stallWatchdog: Job? = null
 
     private val adapter get() = context.getSystemService(BluetoothManager::class.java).adapter
     private var loop: Job? = null
@@ -96,7 +100,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             }
             val name = device.name ?: GlassesProtocol.DEVICE_NAME
             setState(LinkState.Connecting(name))
-            val mgr = GlassesBleManager(context, ::onControl, ::log)
+            val mgr = GlassesBleManager(context, ::onControl, ::onImageChunk, ::log)
             manager = mgr
             try {
                 mgr.connect(device)
@@ -109,6 +113,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 log("Connected to $name (${device.address}), MTU ${mgr.negotiatedMtu}")
                 mgr.stateAsFlow().first { it is ConnectionState.Disconnected }
                 log("Glasses disconnected")
+                emitAll(assembler.abort("glasses disconnected"))
             } catch (e: Exception) {
                 failures++
                 log("Connect failed: ${e.message ?: e::class.simpleName}")
@@ -152,26 +157,55 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             cont.invokeOnCancellation { runCatching { scanner.stopScan(callback) } }
         }
 
-    // ---- Phase 1: echo test ----------------------------------------------
+    // ---- Captures: CONTROL header + IMAGE_DATA chunks -> one JPEG -------------
+    // Nordic delivers indications on one callback thread, in order.
 
     private fun onControl(bytes: ByteArray) {
-        val text = bytes.toString(Charsets.UTF_8)
-        val receivedAt = SystemClock.elapsedRealtime()
-        _lastReceived.value = ReceivedMessage(timestamp(), text)
-        log("← CONTROL received: \"$text\" (${bytes.size} bytes)")
-        scope.launch {
-            val reply = "ECHO $text"
-            try {
-                val mgr = manager ?: error("not connected")
-                withTimeout(WRITE_TIMEOUT_MS) { mgr.writeResultText(reply) }
-                val ms = SystemClock.elapsedRealtime() - receivedAt
-                _lastReceived.update { it?.copy(echoMs = ms) }
-                log("→ RESULT_TEXT sent: \"$reply\" ($ms ms)")
-            } catch (e: Exception) {
-                val msg = e.message ?: e::class.simpleName
-                _lastReceived.update { it?.copy(echoError = msg) }
-                log("RESULT_TEXT write failed: $msg")
+        val events = assembler.onHeader(bytes)
+        events.filterIsInstance<CaptureEvent.Started>().forEach {
+            log("← CONTROL header: photo ${it.totalBytes} bytes, distance ${it.distanceMm?.let { mm -> "$mm mm" } ?: "no reading"}")
+        }
+        emitAll(events)
+        armStallWatchdog()
+    }
+
+    private fun onImageChunk(bytes: ByteArray) {
+        val events = assembler.onChunk(bytes)
+        emitAll(events)
+        if (assembler.inProgress) armStallWatchdog() else stallWatchdog?.cancel()
+    }
+
+    /** Fails the transfer if the glasses stop sending mid-photo, instead of waiting forever. */
+    private fun armStallWatchdog() {
+        stallWatchdog?.cancel()
+        stallWatchdog = scope.launch {
+            delay(CHUNK_STALL_TIMEOUT_MS)
+            emitAll(assembler.abort("no data from the glasses for ${CHUNK_STALL_TIMEOUT_MS / 1000} s"))
+        }
+    }
+
+    private fun emitAll(events: List<CaptureEvent>) {
+        for (e in events) {
+            when (e) {
+                is CaptureEvent.Completed -> log("← IMAGE_DATA complete: ${e.jpeg.size} bytes in ${e.transferMs} ms " +
+                    "(%.1f KB/s)".format(e.jpeg.size / 1.024 / e.transferMs.coerceAtLeast(1)))
+                is CaptureEvent.Failed -> log("Photo transfer failed: ${e.reason}")
+                else -> Unit
             }
+            _captures.tryEmit(e)
+        }
+    }
+
+    /** Writes the composed sentence to the glasses. Returns false if not connected or the write failed. */
+    suspend fun sendResultText(text: String): Boolean {
+        val mgr = manager ?: return false.also { log("RESULT_TEXT not sent: glasses not connected") }
+        return try {
+            withTimeout(WRITE_TIMEOUT_MS) { mgr.writeResultText(text) }
+            log("→ RESULT_TEXT sent (${text.toByteArray().size} bytes): \"$text\"")
+            true
+        } catch (e: Exception) {
+            log("RESULT_TEXT write failed: ${e.message ?: e::class.simpleName}")
+            false
         }
     }
 
@@ -187,5 +221,6 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
         private const val SCAN_WINDOW_MS = 15_000L
         private const val CONNECT_TIMEOUT_MS = 15_000L
         private const val WRITE_TIMEOUT_MS = 5_000L
+        private const val CHUNK_STALL_TIMEOUT_MS = 4_000L
     }
 }

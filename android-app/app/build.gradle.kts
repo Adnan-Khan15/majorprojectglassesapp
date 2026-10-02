@@ -13,8 +13,8 @@ android {
         // Android 12+: runtime BLUETOOTH_SCAN/CONNECT, no location permission needed.
         minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2-gemma4"
+        versionCode = 3
+        versionName = "0.3-capture"
         // LiteRT-LM ships arm64 native code; every phone this targets is arm64.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -62,4 +62,6 @@ dependencies {
     // Nordic BLE central library + coroutine extensions
     implementation("no.nordicsemi.android:ble:2.11.0")
     implementation("no.nordicsemi.android:ble-ktx:2.11.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

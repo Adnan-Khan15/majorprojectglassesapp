@@ -28,7 +28,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smartglasses.app.ble.LinkState
-import com.smartglasses.app.ble.ReceivedMessage
 import com.smartglasses.app.glassesApp
 
 @Composable
@@ -36,7 +35,6 @@ fun MainScreen() {
     val link = LocalContext.current.glassesApp.link
     val state by link.state.collectAsStateWithLifecycle()
     val log by link.log.collectAsStateWithLifecycle()
-    val last by link.lastReceived.collectAsStateWithLifecycle()
 
     Surface(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -46,7 +44,6 @@ fun MainScreen() {
             item { Spacer(Modifier.size(16.dp)); Text("Glasses", style = MaterialTheme.typography.headlineMedium) }
             item { Spacer(Modifier.size(8.dp)); ConnectionBanner(state) }
             item { Spacer(Modifier.size(8.dp)); ModelSection() }
-            item { Spacer(Modifier.size(8.dp)); LastReceivedCard(last) }
             item { Spacer(Modifier.size(12.dp)); Text("Link log", style = MaterialTheme.typography.titleMedium) }
             items(log) { line ->
                 Row {
@@ -89,27 +86,3 @@ private fun Dot(color: Color) {
     Surface(Modifier.size(10.dp), shape = CircleShape, color = color) {}
 }
 
-@Composable
-private fun LastReceivedCard(msg: ReceivedMessage?) {
-    Column(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text("Last message from glasses", style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (msg == null) {
-            Text("Nothing received yet — press the button on the glasses",
-                style = MaterialTheme.typography.bodyLarge)
-        } else {
-            Text("\"${msg.text}\"", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace)
-            Text("Received at ${msg.time}", style = MaterialTheme.typography.bodyMedium)
-            when {
-                msg.echoError != null -> Text("Echo back failed: ${msg.echoError}", color = StatusColors.bad)
-                msg.echoMs != null -> Text("Echoed back in ${msg.echoMs} ms", color = StatusColors.ok)
-                else -> Text("Echoing back…", color = StatusColors.busy)
-            }
-        }
-    }
-}
