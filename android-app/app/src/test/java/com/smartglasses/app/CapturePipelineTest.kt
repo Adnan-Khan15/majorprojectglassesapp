@@ -23,7 +23,8 @@ class CapturePipelineTest {
     private fun header(size: Int, distanceMm: Int): ByteArray =
         ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN).putInt(size).putShort(distanceMm.toShort()).array()
 
-    private fun chunks(data: ByteArray, mtu: Int = 515) = data.toList().chunked(mtu - 3).map { it.toByteArray() }
+    // Same chunking as the firmware: min(MTU - 3, 244) bytes.
+    private fun chunks(data: ByteArray, mtu: Int = 515) = data.toList().chunked(minOf(mtu - 3, 244)).map { it.toByteArray() }
 
     @Test
     fun reassemblesFirmwareStreamIntoTheSameJpegWithDistance() {

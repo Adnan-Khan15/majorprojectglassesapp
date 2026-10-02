@@ -40,7 +40,7 @@ The glasses act as a BLE GATT server. They advertise as `SmartGlasses` with serv
 | Characteristic | UUID suffix | Direction | Type | Contents |
 |---|---|---|---|---|
 | CONTROL | `…0002…` | glasses → phone | indicate | 6-byte header, little-endian: image size (uint32) + distance in mm (uint16; `0` means no valid reading) |
-| IMAGE_DATA | `…0003…` | glasses → phone | indicate | JPEG, streamed in (MTU − 3)-byte chunks (512 B at MTU 515). The board sends each chunk only after the phone acknowledges the previous one. |
+| IMAGE_DATA | `…0003…` | glasses → phone | indicate | JPEG, streamed in chunks of min(MTU − 3, 244) bytes. The board sends each chunk only after the phone acknowledges the previous one. 244 B fits one radio packet; full 512 B chunks were silently dropped by a test phone's Bluetooth stack. |
 | RESULT_TEXT | `…0004…` | phone → glasses | write | The sentence to speak, as UTF-8 |
 
 Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/include/glasses_protocol.h) on the board and [`GlassesProtocol.kt`](android-app/app/src/main/java/com/smartglasses/app/ble/GlassesProtocol.kt) in the app.
@@ -140,7 +140,7 @@ You need a **Seeed Studio XIAO ESP32S3 Sense** and a USB-C cable that carries da
 
 ### Option A: prebuilt image (no tools to install)
 
-1. Download **`smartglasses-firmware-v0.3-merged.bin`** from the [Releases page](../../releases/latest).
+1. Download **`smartglasses-firmware-v0.3.1-merged.bin`** from the [Releases page](../../releases/latest).
 2. In Chrome or Edge on a computer, open **https://espressif.github.io/esptool-js/**.
 3. Plug in the board. If it isn't detected, hold the **B (BOOT)** button while plugging it in.
 4. Click **Connect** and choose the board's serial port.
@@ -191,7 +191,8 @@ No button yet? Type **`p`** in the serial monitor to simulate a press.
   ```
   [CAM] frame 640x480, 28431 bytes; [TOF] distance 362 mm  (capture+ToF 61 ms)
   [BLE] CONTROL header sent: size=28431 dist=362 -> acknowledged
-  [BLE] IMAGE_DATA sent: 28431 bytes in 56 packets of <=512 B, 1180 ms (23.5 KB/s)
+  [BLE] streaming 28431 bytes in 244-byte chunks (MTU 515)
+  [BLE] IMAGE_DATA sent: 28431 bytes in 117 packets of <=244 B, 1950 ms (14.2 KB/s)
   [BLE] RESULT_TEXT received (52 bytes): "a blue pen with Pentel written on it, 36 centimetres"
   [TIME] button press -> RESULT_TEXT back on board: 4870 ms
   ```
@@ -271,7 +272,8 @@ esp32-firmware/
 | Button press says `not sent: connected=0` | The phone isn't connected yet; wait for the green banner |
 | `[TOF] !! VL53L1X FAILED` | Check SDA→D4, SCL→D5, 3V3 and GND. Captures still work, just without a distance |
 | `[TOF] no valid reading` | The object is too close (under ~4 cm), too far (over ~4 m), or too dark or shiny for the sensor |
-| Card: "photo … didn't arrive complete" | The link dropped mid-transfer; wait for the green banner and press again |
+| Card: "photo … didn't arrive complete" | The link dropped mid-transfer. The board resets the connection, so wait for the green banner (a few seconds) and press again. Send the serial log if it keeps happening |
+| `[CAM] warning: very small JPEG` | The photo is nearly black. Check the lens isn't covered and the room isn't too dark |
 | Phone doesn't speak | Check the media volume; install or enable a text-to-speech engine in Android settings (Google Speech Services) |
 | App closes right after "Allow" | Make sure the phone runs Android 12+; send `adb logcat` output with an issue |
 | "Not enough free storage to unpack the AI model" | Free about 3 GB, then tap **Retry** |

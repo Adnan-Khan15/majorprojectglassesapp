@@ -24,6 +24,12 @@ static constexpr uint32_t DEBOUNCE_MS = 40;
 static constexpr framesize_t CAPTURE_SIZE = FRAMESIZE_VGA;
 static constexpr int JPEG_QUALITY = 12;  // 0-63, lower = better quality, bigger file
 static constexpr uint32_t INDICATION_ACK_TIMEOUT_MS = 2000;
+// 244 B = one indication per link-layer packet (251 B with Data Length Extension).
+// Full-MTU chunks (512 B) were silently dropped by a phone's Bluetooth stack in
+// testing: no ACK, so the link hung until the 30 s ATT timeout.
+static constexpr size_t MAX_CHUNK_BYTES = 244;
+// A VGA JPEG under this is almost certainly a black/blank frame.
+static constexpr size_t SUSPICIOUSLY_SMALL_JPEG = 8000;
 
 // ---- XIAO ESP32S3 Sense onboard camera pin map (from hardware_bringup.ino) ----
 #define PWDN_GPIO_NUM   -1
@@ -52,6 +58,7 @@ static volatile bool clientConnected = false;
 static volatile bool controlSubscribed = false;
 static volatile bool imageSubscribed = false;
 static volatile uint16_t peerMtu = 23;
+static volatile uint16_t connHandle = BLE_HS_CONN_HANDLE_NONE;
 
 // One indication in flight at a time: send, then wait for the phone's ACK.
 static SemaphoreHandle_t indicationDone = nullptr;
@@ -69,12 +76,14 @@ static void startAdvertising();
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
         clientConnected = true;
+        connHandle = info.getConnHandle();
         Serial.printf("[BLE] client connected: %s\n", info.getAddress().toString().c_str());
         // 7.5–15 ms interval for throughput; supervision timeout 4 s.
         s->updateConnParams(info.getConnHandle(), 6, 12, 0, 400);
     }
     void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
         clientConnected = false;
+        connHandle = BLE_HS_CONN_HANDLE_NONE;
         controlSubscribed = false;
         imageSubscribed = false;
         peerMtu = 23;
@@ -148,12 +157,33 @@ static void setupBle() {
 /** Sends one indication and blocks until the phone acknowledges it. */
 static bool indicateAndWait(NimBLECharacteristic* c, const uint8_t* data, size_t len) {
     xSemaphoreTake(indicationDone, 0);  // clear any stale signal
-    if (!clientConnected || !c->indicate(data, len)) return false;
-    if (xSemaphoreTake(indicationDone, pdMS_TO_TICKS(INDICATION_ACK_TIMEOUT_MS)) != pdTRUE) {
-        Serial.println("[BLE] indication ACK timed out");
+    if (!clientConnected) return false;
+    if (!c->indicate(data, len)) {
+        Serial.printf("[BLE] indicate(%u B) refused by the BLE stack\n", (unsigned)len);
         return false;
     }
-    return clientConnected && indicationStatus == BLE_HS_EDONE;
+    if (xSemaphoreTake(indicationDone, pdMS_TO_TICKS(INDICATION_ACK_TIMEOUT_MS)) != pdTRUE) {
+        Serial.printf("[BLE] no ACK from phone for a %u B indication within %lu ms\n",
+                      (unsigned)len, (unsigned long)INDICATION_ACK_TIMEOUT_MS);
+        return false;
+    }
+    if (indicationStatus != BLE_HS_EDONE) {
+        Serial.printf("[BLE] %u B indication failed, status %d\n", (unsigned)len, indicationStatus);
+        return false;
+    }
+    return clientConnected;
+}
+
+/**
+ * After an unacknowledged indication the stack won't send another one until the
+ * 30 s ATT timeout expires. Dropping the link instead lets the phone reconnect
+ * within a few seconds.
+ */
+static void resetLinkAfterStuckTransfer() {
+    if (clientConnected && connHandle != BLE_HS_CONN_HANDLE_NONE) {
+        Serial.println("[BLE] resetting the connection so the phone can reconnect quickly");
+        server->disconnect(connHandle);
+    }
 }
 
 // ======================= Camera + ToF (from hardware_bringup.ino) =======================
@@ -264,6 +294,9 @@ static void captureAndSend() {
     Serial.printf("[CAM] frame %ux%u, %u bytes; [TOF] distance %u mm  (capture+ToF %lu ms)\n",
                   fb->width, fb->height, (unsigned)fb->len, distanceMm,
                   (unsigned long)(capturedMs - lastPressMs));
+    if (fb->len < SUSPICIOUSLY_SMALL_JPEG) {
+        Serial.println("[CAM] warning: very small JPEG - lens covered, too dark, or camera not ready?");
+    }
 
     // CONTROL header: uint32 jpegSize LE, uint16 distanceMm LE (see glasses_protocol.h)
     uint8_t header[CONTROL_HEADER_LEN];
@@ -274,7 +307,9 @@ static void captureAndSend() {
     Serial.printf("[BLE] CONTROL header sent: size=%lu dist=%u -> %s\n",
                   (unsigned long)size, distanceMm, ok ? "acknowledged" : "FAILED");
 
-    size_t chunk = peerMtu > 3 ? peerMtu - 3 : 20;  // ATT indication header is 3 bytes
+    size_t chunk = min((size_t)(peerMtu > 3 ? peerMtu - 3 : 20), MAX_CHUNK_BYTES);  // ATT header is 3 B
+    Serial.printf("[BLE] streaming %lu bytes in %u-byte chunks (MTU %u)\n",
+                  (unsigned long)size, (unsigned)chunk, (unsigned)peerMtu);
     size_t sent = 0, packets = 0;
     while (ok && sent < fb->len) {
         size_t n = min(chunk, fb->len - sent);
@@ -292,6 +327,7 @@ static void captureAndSend() {
     } else {
         Serial.printf("[BLE] transfer ABORTED after %u of %lu bytes (%lu ms)\n",
                       (unsigned)sent, (unsigned long)size, (unsigned long)transferMs);
+        resetLinkAfterStuckTransfer();
     }
     digitalWrite(LED_PIN, LOW);
 }
