@@ -13,22 +13,33 @@ android {
         // Android 12+: runtime BLUETOOTH_SCAN/CONNECT, no location permission needed.
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3-capture"
+        versionCode = 4
+        versionName = "0.4-phase3"
         // LiteRT-LM ships arm64 native code; every phone this targets is arm64.
         ndk { abiFilters += "arm64-v8a" }
     }
 
-    // The bundled model (~2.6 GB) ships as 256 MB parts (AGP can't package a single
-    // asset over 2 GB), stored uncompressed, and is rejoined into one file on first
-    // launch because LiteRT-LM needs a real file path. See scripts/fetch-model.sh.
-    androidResources {
-        noCompress += (0..19).map { ".part%02d".format(it) }
+    // The AI model is NOT in the APK: the user imports it from a file (see ai/ModelStore).
+    // `offline` has no network permission at all; `withDownload` adds INTERNET only for
+    // the optional in-app model download.
+    flavorDimensions += "network"
+    productFlavors {
+        create("offline") {
+            dimension = "network"
+            isDefault = true
+        }
+        create("withDownload") {
+            dimension = "network"
+            versionNameSuffix = "-dl"
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 drops the unused Material icons and other dead code (debug APK is ~110 MB, mostly dex).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -50,6 +61,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")

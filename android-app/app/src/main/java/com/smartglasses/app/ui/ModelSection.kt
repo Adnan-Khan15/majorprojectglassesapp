@@ -47,7 +47,7 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(vm::describePhoto)
     }
-    val ready = model is ModelState.Ready || model is ModelState.Fallback
+    val ready = model !is ModelState.Loading
     val busy = run is AssistantRun.Describing || run is AssistantRun.Receiving
 
     Column(
@@ -62,10 +62,9 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
             Text("On-device AI", style = MaterialTheme.typography.titleMedium)
         }
         when (val m = model) {
-            is ModelState.Unpacking -> {
-                Text("First launch: unpacking the AI model… ${(m.progress * 100).toInt()}%")
-                LinearProgressIndicator(progress = { m.progress }, Modifier.fillMaxWidth())
-                Text("This happens once and takes about a minute.",
+            is ModelState.NoModel -> {
+                Text(m.reason, color = StatusColors.busy)
+                Text("Until the model is set up, photos are described with the basic ML Kit labeller.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             ModelState.Loading -> {
@@ -82,11 +81,9 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
                 Text(m.reason, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = vm::retryModel) { Text("Try loading Gemma again") }
             }
-            is ModelState.Failed -> {
-                Text(m.reason, color = StatusColors.bad)
-                Button(onClick = vm::retryModel) { Text("Retry") }
-            }
         }
+
+        ModelSetupCard()
 
         Button(
             onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },

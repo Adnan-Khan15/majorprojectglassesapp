@@ -11,7 +11,7 @@ Smart assistive glasses (BE major project). A Seeed XIAO ESP32S3 Sense on the gl
 ## Build and test
 ```bash
 # Android (JDK 17)
-cd android-app && ./gradlew testDebugUnitTest assembleDebug
+cd android-app && ./gradlew testOfflineDebugUnitTest assembleOfflineRelease   # flavors: offline (no network), withDownload
 # Firmware (needs `pip install platformio`)
 cd esp32-firmware && pio run            # build for the board
 cd esp32-firmware && pio test -e native # host tests of pure C/C++ logic (once added in Phase 3)
@@ -21,6 +21,7 @@ cd esp32-firmware && pio test -e native # host tests of pure C/C++ logic (once a
 - **Evidence rule.** Anything that touches the board, speaker, mic, BLE radio, or phone GPU is "implemented, awaiting hardware verification" until the user runs the steps in `docs/HARDWARE_TESTS.md`. Never state a measurement that wasn't taken, and never present a guessed root cause as fact (e.g. why 512-byte BLE chunks stalled, or the one-off black 3.6 KB image).
 - **The BLE contract has two copies**: `esp32-firmware/include/glasses_protocol.h` and `android-app/.../ble/GlassesProtocol.kt`. Change both together.
 - **A tap must keep working** at every commit: button → photo + distance → spoken description.
+- **The model is never bundled.** `ai/ModelStore` imports/verifies it (manifest: `app/src/main/assets/model-manifest.json`).
 - **Never commit** model files (`*.litertlm`), keystores, or `local.properties`.
 - One commit per milestone on feature branches; delete dead code rather than keeping two paths.
 

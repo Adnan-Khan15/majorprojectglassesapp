@@ -4,7 +4,7 @@ Glasses that tell you what you're looking at. Press the button on the frame and,
 
 > "a blue pen with Pentel written on it, 36 centimetres"
 
-Everything runs on the phone and the glasses, with no internet connection. The AI model is **packaged inside the app**. The glasses take the photo and measure the distance, your Android phone works out what the object is, and the glasses speak the answer through their own speaker. Nothing goes to the cloud, and no cable connects the glasses to the phone.
+Everything runs on the phone and the glasses, with no internet connection. The AI model is a file you put on the phone once; the app never sends anything to the cloud. The glasses take the photo and measure the distance, your Android phone works out what the object is, and the glasses speak the answer through their own speaker. Nothing goes to the cloud, and no cable connects the glasses to the phone.
 
 This is a BE major project with two parts:
 
@@ -52,7 +52,7 @@ Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/inclu
 | Phone BLE | [Nordic Android BLE Library](https://github.com/NordicSemiconductor/Android-BLE-Library) | Queues every GATT operation, which avoids the race conditions of raw `BluetoothGatt` callbacks |
 | Board BLE | [NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino) | Uses much less memory than the stock ESP32 BLE stack, which matters because the camera shares the heap. The ESP32-S3 only supports BLE (no Classic Bluetooth), so this is the right stack. |
 | Text reading | Google ML Kit Text Recognition v2 (on-device) | Reads brand names and labels offline |
-| Object description | **[Gemma 4 E2B](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm)** (Google, Apache 2.0) on **[LiteRT-LM](https://developers.google.com/edge/litert-lm/android)**, using the phone's GPU (falls back to the CPU) | Google's newest small multimodal model. It describes objects in natural language and reads labels itself. The model file (2.6 GB) is bundled in the APK. If it can't start on a phone, the app switches to ML Kit Image Labeling so captures still work. |
+| Object description | **[Gemma 4 E2B](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm)** (Google, Apache 2.0) on **[LiteRT-LM](https://developers.google.com/edge/litert-lm/android)**, using the phone's GPU (falls back to the CPU) | Google's newest small multimodal model. It describes objects in natural language and reads labels itself. The model file (2.6 GB) is imported once from a file on the phone, not bundled in the APK. If it isn't installed yet or can't start on a phone, the app switches to ML Kit Image Labeling so captures still work. |
 | Speech | [SAM](https://github.com/0xD34D/SAM-ESP32) → I2S → MAX98357A amp | SAM builds speech from phonemes, so it can say any word, including brand names (a fixed-dictionary synth can't) |
 
 ---
@@ -65,7 +65,7 @@ Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/inclu
 | 2 | Camera → JPEG → BLE → image shown on the phone | ✅ Code complete; on-hardware test pending |
 | 3 | ToF distance sent along with the image | ✅ Code complete; on-hardware test pending |
 | 4 | ML Kit OCR on the received image | ✅ Done ahead of schedule; testable with **Try with a photo** |
-| 5 | Object description (Gemma 4 E2B, bundled) + latency measurement | ✅ Built in; phone latency not yet measured (see results below) |
+| 5 | Object description (Gemma 4 E2B) + latency measurement | ✅ Built in; phone latency not yet measured (see results below) |
 | 6 | Compose the sentence and send it back | ✅ Sent on RESULT_TEXT and logged by the board; **spoken by the phone for now** |
 | 7 | SAM speech over I2S on the board | ⏳ Waiting for the MAX98357A + speaker to be wired |
 | 8 | Full end-to-end timed run (target: 5–10 s) | ⏳ |
@@ -100,36 +100,31 @@ On a recent flagship phone's GPU, Google's benchmark for this model is about 0.3
 **Requirements:**
 - an Android phone running **Android 12 or newer**, with Bluetooth
 - **8 GB of RAM or more** recommended
-- about **8 GB of free storage** while installing; about 5.3 GB once set up (the app plus the unpacked AI model)
+- about **3 GB of free storage** for the AI model, plus the model file itself while you import it
 
-The APK is **2.7 GB** because the whole AI model is inside it. GitHub doesn't allow release files over 2 GB, so it's uploaded in **two parts** that you join on a computer.
+The app and the AI model are installed **separately**. The APK is about 50 MB; the model (`gemma-4-E2B-it.litertlm`, 2.59 GB) is a file you put on the phone once.
 
-1. From the [latest release](../../releases/latest), download **both** `SmartGlasses-v0.3.apk.part1` and `SmartGlasses-v0.3.apk.part2` into the same folder.
-2. Join them into one APK:
-   - **macOS / Linux:** `cat SmartGlasses-v0.3.apk.part1 SmartGlasses-v0.3.apk.part2 > SmartGlasses-v0.3.apk`
-   - **Windows (Command Prompt):** `copy /b SmartGlasses-v0.3.apk.part1 + SmartGlasses-v0.3.apk.part2 SmartGlasses-v0.3.apk`
-   - Optional check that the file is complete: its SHA-256 should match the one in the release notes (`shasum -a 256 SmartGlasses-v0.3.apk`, or `certutil -hashfile SmartGlasses-v0.3.apk SHA256` on Windows).
-3. Put it on the phone. The easiest way is `adb install SmartGlasses-v0.3.apk` (see below). Otherwise, copy it over USB or upload it to Google Drive and open it on the phone.
-4. Open the APK file. Android will warn about installing from an unknown source:
-   - Tap **Settings**, turn on **Allow from this source** for your browser or Files app, then go back.
-   - Tap **Install**.
-   - If Google Play Protect shows "unrecognised app", tap **More details → Install anyway**. This happens with any app that isn't from the Play Store.
-5. Open **Glasses**. **The first launch spends about a minute unpacking the AI model**, with a progress bar. After that it starts in seconds. The app explains why it needs Bluetooth before asking. Tap **Allow Bluetooth access**, then allow **Nearby devices** (and notifications, if asked).
-   - The app never uses your location; Android just groups Bluetooth under "Nearby devices".
-   - If you tapped "Don't allow" by mistake, the app shows an **Open Settings** button to fix it.
-6. Make sure Bluetooth is on. The status banner at the top shows *Looking for glasses… → Connecting… → Connected to SmartGlasses*.
-7. When the AI card says **Gemma 4 E2B ready on GPU**, press the glasses button. Or tap **Try with a photo** and pick any photo. The phone speaks the sentence and shows it with timings.
+### 1. Install the app
+1. From the [latest release](../../releases/latest), download **`SmartGlasses-offline.apk`**. This build has **no internet permission at all**; everything runs on the phone.
+   - `SmartGlasses-withDownload.apk` is the same app plus an optional "Download" button for the model (it adds the internet permission only for that).
+2. Open the APK on the phone. Android will warn about installing from an unknown source: tap **Settings**, turn on **Allow from this source**, go back, and tap **Install**. If Play Protect says "unrecognised app", tap **More details → Install anyway**.
+3. Open **Glasses** and allow **Nearby devices** (Bluetooth) when asked. The app never uses your location.
 
-To update later, install the newer APK over the old one. If Android says the package conflicts, uninstall the old version first.
+### 2. Install the AI model
+1. Download **`gemma-4-E2B-it.litertlm`** to the phone, for example from the Google Drive link you were given (in Drive: **⋮ → Download**), or from [Hugging Face](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/blob/main/gemma-4-E2B-it.litertlm). It ends up in **Downloads**.
+2. In the app, on the **AI model** card, tap **Import from file** and pick the file.
+3. The app copies it into its own storage and checks it (SHA-256). This takes a minute or two. When it says **Model installed and verified ✓**, it loads Gemma; wait for **Gemma 4 E2B ready on GPU**.
+4. You can now delete the copy in Downloads to get the space back.
+
+Until the model is installed, the app still works: photos are described with the basic ML Kit labeller instead.
 
 <details>
-<summary>Installing from a computer with adb instead</summary>
-
-Turn on **Developer options → USB debugging** on the phone, connect it by USB, then run:
+<summary>Developers: skip the import with adb</summary>
 
 ```bash
-adb install -r SmartGlasses-v0.3.apk     # a 2.7 GB install takes a minute or two
+scripts/fetch-model.sh --push   # downloads + verifies once, then adb-pushes to the app's drop-in folder
 ```
+The app uses a file at `/sdcard/Android/data/com.smartglasses.app/files/models/gemma-4-E2B-it.litertlm` **in place** (no copy). Tap **Rescan** on the model card after pushing. Install APKs with `adb install -r app-offline-release.apk`.
 </details>
 
 ---
@@ -221,14 +216,16 @@ adb logcat -s GlassesLink:D AssistantSession:D SceneDescriber:D PhoneTtsAnnounce
 
 You'll need **JDK 17** and the **Android SDK** (platform 35), or simply **Android Studio**.
 
-The model isn't stored in git (it's 2.6 GB). Fetch it first. The script downloads it from Hugging Face (no account needed), checks its SHA-256, and splits it into 256 MB asset parts, because the Android build can't package one asset over 2 GB:
+The model is not in git or in the APK. Two build flavors exist:
 
 ```bash
-scripts/fetch-model.sh
 cd android-app
-./gradlew assembleDebug        # → app/build/outputs/apk/debug/app-debug.apk
-./gradlew installDebug         # build and install on a connected phone
+./gradlew assembleOfflineRelease        # → app/build/outputs/apk/offline/release/  (no network permission)
+./gradlew assembleWithDownloadRelease   # → same app + optional in-app model download
+./gradlew installOfflineDebug           # build and install a debug build on a connected phone
+./gradlew testOfflineDebugUnitTest      # unit tests
 ```
+Then install the model as described above (or `scripts/fetch-model.sh --push`).
 
 In Android Studio, use **File → Open → `android-app/`**, wait for the Gradle sync, then press **Run ▶**.
 
@@ -238,7 +235,7 @@ In Android Studio, use **File → Open → `android-app/`**, wait for the Gradle
 android-app/app/src/main/java/com/smartglasses/app/
 ├── GlassesApp.kt              # Application; owns the BLE link and AI model for the whole process lifetime
 ├── ai/
-│   ├── ModelInstaller.kt      # first launch: joins the bundled model parts into one file
+│   ├── ModelStore.kt          # finds / imports / verifies the model file (never bundled)
 │   ├── GemmaVision.kt         # Gemma 4 E2B on LiteRT-LM (GPU, then CPU), prompt
 │   ├── MlKitVision.kt         # ML Kit OCR + image-labelling fallback
 │   └── SceneDescriber.kt      # downscale → OCR → Gemma (30 s timeout) → "…, 36 centimetres"
@@ -276,6 +273,7 @@ esp32-firmware/
 | `[CAM] warning: very small JPEG` | The photo is nearly black. Check the lens isn't covered and the room isn't too dark |
 | Phone doesn't speak | Check the media volume; install or enable a text-to-speech engine in Android settings (Google Speech Services) |
 | App closes right after "Allow" | Make sure the phone runs Android 12+; send `adb logcat` output with an issue |
-| "Not enough free storage to unpack the AI model" | Free about 3 GB, then tap **Retry** |
+| "Not enough free storage" when importing the model | Free about 3 GB, then import again |
 | AI card says Gemma couldn't start | The app keeps working with ML Kit labels. Send `adb logcat -s SceneDescriber` output; tapping **Try loading Gemma again** retries |
-| Install fails or "App not installed" | Re-join the parts and check the SHA-256; make sure about 8 GB is free |
+| Install fails or "App not installed" | Uninstall the old version first (for example the 2.7 GB v0.3 build that bundled the model) |
+| Import says the file "is not the expected model" | The download is incomplete or a different file. Download it again; the size must be exactly 2,588,147,712 bytes |
