@@ -7,6 +7,10 @@ import com.smartglasses.app.ai.Description
 import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.ble.CaptureEvent
 import com.smartglasses.app.ble.GlassesLink
+import com.smartglasses.app.metrics.InteractionTimeline
+import com.smartglasses.app.metrics.LatencyLog
+import com.smartglasses.app.metrics.Stage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,6 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
+import java.util.UUID
 
 enum class Source { GLASSES, GALLERY }
 
@@ -56,14 +62,30 @@ class AssistantSession(
     private val link: GlassesLink,
     private val describer: SceneDescriber,
     private val announcer: ResultAnnouncer,
+    private val latencyLog: LatencyLog,
 ) {
     private val _run = MutableStateFlow<AssistantRun>(AssistantRun.Idle)
     val run: StateFlow<AssistantRun> = _run.asStateFlow()
 
     private var job: Job? = null
     private var lastInput: Input? = null
+    /** Timeline of the glasses capture currently arriving (header seen, image not complete yet). */
+    private var arriving: InteractionTimeline? = null
 
     private data class Input(val jpeg: ByteArray, val source: Source, val distanceMm: Int?, val transferMs: Long?)
+
+    private fun newTimeline(source: Source) = InteractionTimeline(
+        id = UUID.randomUUID().toString().take(8),
+        mode = "tap",
+        source = if (source == Source.GLASSES) "glasses" else "gallery",
+        clock = SystemClock::elapsedRealtime,
+    )
+
+    private fun finish(t: InteractionTimeline, outcome: String, error: String? = null) {
+        t.outcome = outcome
+        t.put("error", error)
+        latencyLog.append(t)
+    }
 
     fun start() {
         scope.launch { link.captures.collect(::onCapture) }
@@ -73,17 +95,32 @@ class AssistantSession(
         when (e) {
             is CaptureEvent.Started -> {
                 job?.cancel()  // a new button press supersedes whatever was running
+                arriving = newTimeline(Source.GLASSES).apply {
+                    mark(Stage.IMAGE_HEADER)
+                    put("image_bytes", e.totalBytes)
+                    put("distance_mm", e.distanceMm ?: 0)
+                }
                 _run.value = AssistantRun.Receiving(0, e.totalBytes, e.distanceMm)
             }
             is CaptureEvent.Progress -> (_run.value as? AssistantRun.Receiving)?.let {
                 _run.value = it.copy(receivedBytes = e.receivedBytes, totalBytes = e.totalBytes)
             }
-            is CaptureEvent.Completed -> process(Input(e.jpeg, Source.GLASSES, e.distanceMm, e.transferMs))
-            is CaptureEvent.Failed -> _run.value = AssistantRun.Error(
-                Source.GLASSES, null,
-                "The photo from the glasses didn't arrive complete (${e.reason}). Press the button again.",
-                canRetry = false,
-            )
+            is CaptureEvent.Completed -> {
+                val t = arriving ?: newTimeline(Source.GLASSES)
+                arriving = null
+                t.mark(Stage.IMAGE_RECEIVED)
+                t.put("transfer_kbps", "%.1f".format(Locale.US, e.jpeg.size / 1.024 / e.transferMs.coerceAtLeast(1)))
+                process(Input(e.jpeg, Source.GLASSES, e.distanceMm, e.transferMs), t)
+            }
+            is CaptureEvent.Failed -> {
+                arriving?.let { finish(it, "transfer_failed", e.reason) }
+                arriving = null
+                _run.value = AssistantRun.Error(
+                    Source.GLASSES, null,
+                    "The photo from the glasses didn't arrive complete (${e.reason}). Press the button again.",
+                    canRetry = false,
+                )
+            }
         }
     }
 
@@ -96,29 +133,37 @@ class AssistantSession(
 
     fun retry() { lastInput?.let(::process) }
 
-    private fun process(input: Input) {
+    private fun process(input: Input, timeline: InteractionTimeline? = null) {
         lastInput = input
         job?.cancel()
         val processStart = SystemClock.elapsedRealtime()
+        val t = timeline ?: newTimeline(input.source).apply { mark(Stage.IMAGE_RECEIVED, processStart) }
         job = scope.launch {
             val preview = withContext(Dispatchers.Default) { SceneDescriber.decodeDownscaled(input.jpeg, PREVIEW_PX) }
             if (!describer.canDescribe) {
                 _run.value = AssistantRun.Error(input.source, preview,
                     "The AI model is still loading. Try again when the card says it's ready.", canRetry = true)
+                finish(t, "model_not_ready")
                 return@launch
             }
             _run.value = AssistantRun.Describing(input.source, preview, input.distanceMm)
 
             val result = try {
-                describer.describe(input.jpeg, input.distanceMm)
+                describer.describe(input.jpeg, input.distanceMm, t)
             } catch (e: TimeoutCancellationException) {
                 _run.value = AssistantRun.Error(input.source, preview, "The model took too long (over 30 s).", canRetry = true)
+                finish(t, "model_timeout")
                 return@launch
+            } catch (e: CancellationException) {
+                finish(t, "superseded")
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "describe failed", e)
                 _run.value = AssistantRun.Error(input.source, preview, e.message ?: "Something went wrong", canRetry = true)
+                finish(t, "model_error", e.message)
                 return@launch
             }
+            t.put("answer", result.sentence)
 
             // Speak and (for the glasses) send RESULT_TEXT at the same time.
             val sent = if (input.source == Source.GLASSES) async { link.sendResultText(result.sentence) } else null
@@ -130,6 +175,7 @@ class AssistantSession(
                 speechError = e.message ?: "speech failed"
                 null
             }
+            speechMs?.let { t.mark(Stage.PLAY_STARTED, speechStart + it) }
             val timing = RunTiming(
                 transferMs = input.transferMs,
                 ocrMs = result.ocrMs,
@@ -141,9 +187,11 @@ class AssistantSession(
             )
             Log.d(TAG, "${input.source} run: transfer=${timing.transferMs} ocr=${timing.ocrMs} model=${timing.modelMs} " +
                 "describeTotal=${result.totalMs} speechStart=${timing.speechStartMs} total=${timing.totalMs} :: ${result.sentence}")
+            val sentOk = sent?.await()
+            finish(t, if (speechError == null) "ok" else "speech_failed", speechError)
             _run.value = AssistantRun.Done(
                 input.source, preview, input.distanceMm, result, timing,
-                announcer.name, speechError, sent?.await(),
+                announcer.name, speechError, sentOk,
             )
         }
     }

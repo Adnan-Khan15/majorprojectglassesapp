@@ -52,8 +52,11 @@ class GemmaVision(private val cacheDir: File) {
         throw IllegalStateException("Gemma failed to start on GPU and CPU: ${lastError?.message}", lastError)
     }
 
-    /** Returns the model's short description of the main object. */
-    suspend fun describe(jpeg: ByteArray, ocrHint: String?): String = withContext(thread) {
+    /**
+     * Returns the model's short description of the main object. Streams the reply so
+     * [onFirstOutput] can mark when the first text arrived (latency log).
+     */
+    suspend fun describe(jpeg: ByteArray, ocrHint: String?, onFirstOutput: () -> Unit = {}): String = withContext(thread) {
         val e = engine ?: error("Model not loaded")
         val config = ConversationConfig(
             systemInstruction = Contents.of(SYSTEM_PROMPT),
@@ -62,10 +65,10 @@ class GemmaVision(private val cacheDir: File) {
             thinkingConfig = ThinkingConfig(enableThinking = false),
         )
         e.createConversation(config).use { conversation ->
-            val reply = conversation.sendMessage(
-                Contents.of(Content.ImageBytes(jpeg), Content.Text(userPrompt(ocrHint)))
-            )
-            reply.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
+            val acc = StreamAccumulator(onFirstOutput)
+            conversation.sendMessageAsync(Contents.of(Content.ImageBytes(jpeg), Content.Text(userPrompt(ocrHint))))
+                .collect { msg -> acc.add(msg.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }) }
+            acc.text
         }
     }
 

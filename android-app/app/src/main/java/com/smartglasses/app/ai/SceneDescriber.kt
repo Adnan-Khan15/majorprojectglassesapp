@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.util.Log
+import com.smartglasses.app.metrics.InteractionTimeline
+import com.smartglasses.app.metrics.Stage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -87,7 +89,11 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope) {
     val canDescribe: Boolean
         get() = _state.value.let { it is ModelState.Ready || it is ModelState.Fallback }
 
-    suspend fun describe(jpeg: ByteArray, distanceMm: Int?): Description = withContext(Dispatchers.Default) {
+    suspend fun describe(
+        jpeg: ByteArray,
+        distanceMm: Int?,
+        timeline: InteractionTimeline? = null,
+    ): Description = withContext(Dispatchers.Default) {
         check(canDescribe) { "Model is not ready yet" }
         val start = SystemClock.elapsedRealtime()
 
@@ -98,17 +104,23 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope) {
         // OCR on the full-resolution image reads small print far better than at 512 px.
         val ocrText = runCatching { mlkit.readText(decodeDownscaled(jpeg, OCR_MAX_EDGE_PX)) }.getOrDefault("")
         val ocrMs = SystemClock.elapsedRealtime() - ocrStart
+        timeline?.mark(Stage.OCR_DONE)
 
         val modelStart = SystemClock.elapsedRealtime()
         val engine: String
         val phrase: String = if (_state.value is ModelState.Ready) {
             engine = "Gemma 4 E2B (${gemma.backendName})"
-            cleanPhrase(withTimeout(INFERENCE_TIMEOUT_MS) { gemma.describe(smallJpeg, ocrText) })
+            cleanPhrase(withTimeout(INFERENCE_TIMEOUT_MS) {
+                gemma.describe(smallJpeg, ocrText) { timeline?.mark(Stage.FIRST_MODEL_OUTPUT) }
+            })
         } else {
             engine = "ML Kit labels (fallback)"
             fallbackPhrase(mlkit.topLabel(small), ocrText)
         }
         val modelMs = SystemClock.elapsedRealtime() - modelStart
+        timeline?.mark(Stage.FIRST_MODEL_OUTPUT)  // ML Kit fallback has no streaming: first output = done
+        timeline?.mark(Stage.ANSWER_COMPLETE)
+        timeline?.put("engine", engine)
 
         val sentence = compose(phrase, distanceMm)
         Description(sentence, phrase, ocrText, engine, ocrMs, modelMs, SystemClock.elapsedRealtime() - start)

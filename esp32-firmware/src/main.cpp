@@ -66,6 +66,8 @@ static volatile int indicationStatus = 0;
 
 static VL53L1X tof;
 static bool cameraOk = false;
+static uint32_t cameraReadyMs = 0;   // millis() when the camera finished init
+static uint32_t frameIndex = 0;      // captures since boot (diagnostics)
 static bool tofOk = false;
 static uint32_t lastPressMs = 0;
 
@@ -223,6 +225,8 @@ static bool initCamera() {
     sensor_t* s = esp_camera_sensor_get();
     s->set_vflip(s, 1);
     s->set_hmirror(s, 1);
+    Serial.printf("[CAM] sensor PID 0x%02x (0x26 = OV2640, 0x36 = OV3660)\n", s->id.PID);
+    cameraReadyMs = millis();
     return true;
 }
 
@@ -289,6 +293,25 @@ static void captureAndSend() {
         digitalWrite(LED_PIN, LOW);
         return;
     }
+    frameIndex++;
+    Serial.printf("[DIAG] capture #%lu, %lu ms after camera init, free heap %u, free PSRAM %u\n",
+                  (unsigned long)frameIndex, (unsigned long)(millis() - cameraReadyMs),
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
+    // Diagnostic mitigation, NOT a root-cause fix: a black ~3.6 KB frame was seen once
+    // and its cause is unknown. If a frame is suspiciously small, grab one more and keep
+    // the larger, logging both sizes so the next occurrence leaves evidence.
+    if (fb->len < SUSPICIOUSLY_SMALL_JPEG) {
+        size_t firstLen = fb->len;
+        esp_camera_fb_return(fb);
+        fb = esp_camera_fb_get();
+        if (!fb) {
+            Serial.println("[CAM] capture failed on retry");
+            digitalWrite(LED_PIN, LOW);
+            return;
+        }
+        Serial.printf("[DIAG] small frame %u bytes -> retried, new frame %u bytes\n",
+                      (unsigned)firstLen, (unsigned)fb->len);
+    }
     uint16_t distanceMm = readDistanceMm();
     uint32_t capturedMs = millis();
     Serial.printf("[CAM] frame %ux%u, %u bytes; [TOF] distance %u mm  (capture+ToF %lu ms)\n",
@@ -336,6 +359,8 @@ void setup() {
     Serial.begin(115200);
     delay(1500);  // let USB CDC enumerate so early logs aren't lost
     Serial.println("\n[SYS] SmartGlasses firmware - capture + transfer");
+    // Brownouts (e.g. speaker current spikes) show up here as reason 9 (ESP_RST_BROWNOUT).
+    Serial.printf("[SYS] reset reason %d (1=power-on, 3=software, 4=panic, 9=brownout)\n", (int)esp_reset_reason());
     pinMode(BUTTON_PIN, INPUT_PULLDOWN);
     for (int pin : UNUSED_PINS) pinMode(pin, INPUT_PULLDOWN);
     pinMode(LED_PIN, OUTPUT);

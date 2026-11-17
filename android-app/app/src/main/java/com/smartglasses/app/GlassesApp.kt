@@ -6,6 +6,7 @@ import com.smartglasses.app.assistant.AssistantSession
 import com.smartglasses.app.assistant.PhoneTtsAnnouncer
 import com.smartglasses.app.assistant.ResultAnnouncer
 import com.smartglasses.app.ble.GlassesLink
+import com.smartglasses.app.metrics.LatencyLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +21,8 @@ class GlassesApp : Application() {
     // MAX98357A + speaker are wired. This is the only line that should change.
     private val announcer: ResultAnnouncer by lazy { PhoneTtsAnnouncer(this) }
 
-    val session by lazy { AssistantSession(appScope, link, describer, announcer) }
+    val latencyLog by lazy { LatencyLog(filesDir) }
+    val session by lazy { AssistantSession(appScope, link, describer, announcer, latencyLog) }
 
     override fun onCreate() {
         super.onCreate()
