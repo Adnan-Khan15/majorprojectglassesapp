@@ -30,8 +30,8 @@ sealed interface ModelState {
     data class Fallback(val reason: String) : ModelState
 }
 
+/** What the model saw. The spoken sentence (with distance) is composed by the caller. */
 data class Description(
-    val sentence: String,
     val objectPhrase: String,
     val ocrText: String,
     val engine: String,
@@ -106,7 +106,6 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope, privat
 
     suspend fun describe(
         jpeg: ByteArray,
-        distanceMm: Int?,
         timeline: InteractionTimeline? = null,
     ): Description = withContext(Dispatchers.Default) {
         check(canDescribe) { "Model is not ready yet" }
@@ -137,9 +136,8 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope, privat
         timeline?.mark(Stage.ANSWER_COMPLETE)
         timeline?.put("engine", engine)
 
-        val sentence = compose(phrase, distanceMm)
-        Description(sentence, phrase, ocrText, engine, ocrMs, modelMs, SystemClock.elapsedRealtime() - start)
-            .also { Log.d(TAG, "Described in ${it.totalMs} ms (ocr ${it.ocrMs}, model ${it.modelMs}): ${it.sentence}") }
+        Description(phrase, ocrText, engine, ocrMs, modelMs, SystemClock.elapsedRealtime() - start)
+            .also { Log.d(TAG, "Described in ${it.totalMs} ms (ocr ${it.ocrMs}, model ${it.modelMs}): ${it.objectPhrase}") }
     }
 
     companion object {

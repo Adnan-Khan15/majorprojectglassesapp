@@ -33,3 +33,22 @@ Serial monitor: `cd esp32-firmware && pio device monitor` (115200 baud). Single 
 | 2.12 | **Tap end-to-end.** Phone connected, Gemma ready, press the button | Same as v0.3: photo + distance → spoken sentence. The capture+ToF time in the log is now about 1 s longer (5 ToF samples × 200 ms); M3 overlaps this with the transfer | |
 
 The full ToF accuracy test is in `TOF_TEST_PROTOCOL.md`.
+
+## M3: BLE protocol v2 + throughput spike
+
+Flash the new firmware **and** install the new app together: v2 firmware sends a 16-byte image header that older apps reject. (The new app still accepts v1 firmware.)
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 3.1 | Connect; check the app's link log and the **Link tests** card | `Glasses firmware speaks protocol v2`, then `Glasses firmware 0.4.0, protocol v2: camera=true ToF=true speaker=true mic=true, reset reason 1` | |
+| 3.2 | **Tap.** Press the button | Serial: `image N header sent … crc …`, `IMAGE_DATA sent`, then `[TOF] 5 samples in ~1000 ms`, `[CAP] … press -> done … ms`. App: speaks the sentence with the distance. Log: `← ToF for image N: … mm` arrives **after** the image | |
+| 3.3 | **Tap latency vs M2.** 10 taps; compare `press -> done` with M2 | Shorter than M2's capture+ToF+transfer, because the ToF is now measured during the transfer | |
+| 3.4 | **Ping** button, 10 times | Round trip in ms (record min/median/max) | |
+| 3.5 | **Uplink 100 KB**, 3 runs | `uplink (notify): X KB/s, … missing (Y %)` | |
+| 3.6 | **Downlink 100 KB**, 3 runs | `downlink (write without response): X KB/s, … missing (Y %)` | |
+| 3.7 | Tick **Request 2M PHY**, repeat 3.5 and 3.6 | Serial shows `PHY now tx 2 rx 2` if accepted; record KB/s again | |
+| 3.8 | **Decision:** ADPCM 16 kHz needs ~9.6 KB/s including headers (raw PCM: ~32 KB/s). If both directions sustain ≥ 15 KB/s with < 1 % loss, live ADPCM audio is fine. If not, report the numbers before M4/M6 build on it | | |
+| 3.9 | **Test tone / Read ToF / Capture** buttons | Beep from the glasses / a `ToF for image 65535` line in the log / a photo described and spoken | |
+| 3.10 | **Resend.** (Can't be forced from the app.) If the log ever shows `checksum mismatch` → `asking the glasses to resend photo N`, check the photo still gets described | | |
+
+Record the phone model and Android version with every throughput result.

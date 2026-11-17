@@ -39,6 +39,7 @@ import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.assistant.AssistantRun
 import com.smartglasses.app.assistant.RunTiming
 import com.smartglasses.app.assistant.Source
+import com.smartglasses.app.ble.TofReading
 
 @Composable
 fun ModelSection(vm: AssistantViewModel = viewModel()) {
@@ -113,7 +114,7 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
             )
         }
         is AssistantRun.Describing -> ResultRow(run.preview) {
-            SourceLabel(run.source, run.distanceMm)
+            SourceLabel(run.source, null)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
@@ -121,8 +122,8 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
             }
         }
         is AssistantRun.Done -> ResultRow(run.preview) {
-            SourceLabel(run.source, run.distanceMm)
-            Text("\u201c${run.result.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
+            SourceLabel(run.source, run.tof)
+            Text("\u201c${run.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
             Text(timingLine(run.timing), style = MaterialTheme.typography.bodySmall)
             Text(
                 "${run.result.engine} · spoken on ${run.announcer}",
@@ -146,9 +147,14 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SourceLabel(source: Source, distanceMm: Int?) {
+private fun SourceLabel(source: Source, tof: TofReading?) {
     val text = when (source) {
-        Source.GLASSES -> "From glasses · " + (distanceMm?.let { SceneDescriber.formatDistance(it) } ?: "no distance reading")
+        Source.GLASSES -> "From glasses · " + when {
+            tof == null -> "distance pending"
+            tof.isValid -> SceneDescriber.formatDistance(tof.medianMm) + " (${tof.validCount}/${tof.sampleCount} samples, ±${tof.spreadMm / 2} mm)"
+            tof.noSensor -> "no distance sensor"
+            else -> "no reliable distance"
+        }
         Source.GALLERY -> "From gallery (no distance sensor)"
     }
     Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)

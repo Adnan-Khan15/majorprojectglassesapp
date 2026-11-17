@@ -39,11 +39,17 @@ The glasses act as a BLE GATT server. They advertise as `SmartGlasses` with serv
 
 | Characteristic | UUID suffix | Direction | Type | Contents |
 |---|---|---|---|---|
-| CONTROL | `…0002…` | glasses → phone | indicate | 6-byte header, little-endian: image size (uint32) + distance in mm (uint16; `0` means no valid reading) |
-| IMAGE_DATA | `…0003…` | glasses → phone | indicate | JPEG, streamed in chunks of min(MTU − 3, 244) bytes. The board sends each chunk only after the phone acknowledges the previous one. 244 B fits one radio packet; full 512 B chunks were silently dropped by a test phone's Bluetooth stack. |
-| RESULT_TEXT | `…0004…` | phone → glasses | write | The sentence to speak, as UTF-8 |
+| CONTROL | `…0002…` | glasses → phone | indicate | Image header. **v2** (16 B): version, flags, image id, size, CRC-32, width, height. v1 (6 B, old firmware): size + distance |
+| IMAGE_DATA | `…0003…` | glasses → phone | indicate | JPEG in chunks of min(MTU − 3, 244) bytes, each sent after the previous one is acknowledged. 244 B fits one radio packet; full 512 B chunks were silently dropped by a test phone's Bluetooth stack (cause not established) |
+| RESULT_TEXT | `…0004…` | phone → glasses | write | The sentence, as UTF-8 (logged by the board) |
+| COMMAND | `…0005…` | phone → glasses | write | Capture, stop playback, volume, test tone, capabilities, ping, resend/abort image, throughput test, settings, mic monitor, ToF read |
+| EVENT | `…0006…` | glasses → phone | notify | Button, photo captured, **ToF result** (median, valid samples, spread, flags), playback, credits, errors, capabilities |
+| AUDIO_UP | `…0007…` | glasses → phone | notify | Mic audio: 8-byte header (stream, flags, sequence, ADPCM state) + IMA ADPCM |
+| AUDIO_DOWN | `…0008…` | phone → glasses | write without response | Speech audio, same frame format |
 
-Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/include/glasses_protocol.h) on the board and [`GlassesProtocol.kt`](android-app/app/src/main/java/com/smartglasses/app/ble/GlassesProtocol.kt) in the app.
+In v2 the board measures the distance **while** the photo is being sent and reports it as an event afterwards, so the 5 × 200 ms ToF samples add no delay.
+
+Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/include/glasses_protocol.h) + [`glasses_frames.h`](esp32-firmware/lib/glasses_core/src/glasses_frames.h) on the board, [`GlassesProtocol.kt`](android-app/app/src/main/java/com/smartglasses/app/ble/GlassesProtocol.kt) + [`Frames.kt`](android-app/app/src/main/java/com/smartglasses/app/ble/Frames.kt) in the app. Tests on both sides check the same byte strings.
 
 ### Tech choices
 

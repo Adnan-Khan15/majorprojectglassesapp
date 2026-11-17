@@ -1,0 +1,85 @@
+#include "throughput.h"
+#include <Arduino.h>
+#include "glasses_frames.h"
+#include "ble_link.h"
+
+namespace throughput {
+
+void runUp(uint32_t bytes) {
+    size_t frameLen = ble::maxPayload();
+    if (frameLen <= AUDIO_HDR_LEN) return;
+    size_t dataLen = frameLen - AUDIO_HDR_LEN;
+    uint8_t frame[244];
+    audio_header_t h = {STREAM_THROUGHPUT, AUDIO_FLAG_START, 0, 0, 0, AUDIO_CODEC_RAW};
+    uint32_t sent = 0, t0 = millis();
+    uint16_t frames = 0, retries = 0, failed = 0;
+    Serial.printf("[TPUT] uplink: %lu bytes in %u-byte notifications\n", (unsigned long)bytes, (unsigned)frameLen);
+    while (sent < bytes && ble::connected()) {
+        size_t n = min((uint32_t)dataLen, bytes - sent);
+        if (sent + n >= bytes) h.flags |= AUDIO_FLAG_END;
+        audio_header_pack(&h, frame);
+        for (size_t i = 0; i < n; i++) frame[AUDIO_HDR_LEN + i] = (uint8_t)(sent + i);  // checkable pattern
+        if (ble::notifyAudio(frame, AUDIO_HDR_LEN + n, &retries)) { sent += n; frames++; }
+        else { failed++; sent += n; }  // counted as sent so the test ends; the phone sees the seq gap
+        h.seq++;
+        h.flags &= ~AUDIO_FLAG_START;
+    }
+    uint32_t ms = millis() - t0;
+    uint8_t p[17];
+    p[0] = 0;
+    put_u32(p + 1, sent);
+    put_u16(p + 5, frames);
+    put_u16(p + 7, failed);
+    put_u32(p + 9, ms);
+    put_u16(p + 13, retries);
+    ble::sendEvent(EVT_THROUGHPUT_RESULT, p, 15);
+    Serial.printf("[TPUT] uplink done: %lu bytes, %u frames, %u failed, %u buffer retries, %lu ms (%.1f KB/s from the board's view)\n",
+                  (unsigned long)sent, frames, failed, retries, (unsigned long)ms, ms ? sent / 1.024 / ms : 0.0);
+}
+
+static volatile bool armed = false, done = false;
+static volatile uint32_t expected = 0, gotBytes = 0, firstMs = 0, lastMs = 0;
+static volatile uint16_t gotFrames = 0, missing = 0, nextSeq = 0;
+
+void armDown(uint32_t bytes) {
+    expected = bytes;
+    gotBytes = 0; gotFrames = 0; missing = 0; nextSeq = 0; firstMs = 0; lastMs = 0;
+    done = false;
+    armed = true;
+    Serial.printf("[TPUT] downlink armed for %lu bytes\n", (unsigned long)bytes);
+}
+
+void onDownFrame(const uint8_t* d, size_t len) {
+    if (!armed) return;
+    audio_header_t h;
+    if (audio_header_unpack(d, len, &h) != 0) return;
+    uint32_t now = millis();
+    if (gotFrames == 0) { firstMs = now; nextSeq = h.seq; }
+    if (h.seq != nextSeq) missing += (uint16_t)(h.seq - nextSeq);
+    nextSeq = h.seq + 1;
+    gotFrames++;
+    gotBytes += len - AUDIO_HDR_LEN;
+    lastMs = now;
+    if (h.flags & AUDIO_FLAG_END) done = true;
+}
+
+void poll() {
+    if (!armed) return;
+    bool idle = gotFrames > 0 && millis() - lastMs > 3000;
+    if (!done && !idle) return;
+    armed = false;
+    uint32_t ms = lastMs - firstMs;
+    uint8_t p[15];
+    p[0] = 1;
+    put_u32(p + 1, gotBytes);
+    put_u16(p + 5, gotFrames);
+    put_u16(p + 7, missing);
+    put_u32(p + 9, ms);
+    put_u16(p + 13, 0);
+    ble::sendEvent(EVT_THROUGHPUT_RESULT, p, 15);
+    Serial.printf("[TPUT] downlink done: %lu of %lu bytes, %u frames, %u missing, %lu ms (%.1f KB/s)%s\n",
+                  (unsigned long)gotBytes, (unsigned long)expected, gotFrames, missing, (unsigned long)ms,
+                  ms ? gotBytes / 1.024 / ms : 0.0, done ? "" : " [ended by 3 s idle, END frame lost]");
+}
+
+}  // namespace throughput

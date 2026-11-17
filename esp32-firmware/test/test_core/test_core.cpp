@@ -5,6 +5,7 @@
 #include "ima_adpcm.h"
 #include "tof_filter.h"
 #include "adpcm_golden.h"
+#include "glasses_frames.h"
 
 void setUp() {}
 void tearDown() {}
@@ -76,6 +77,45 @@ static void test_tof_range_limits() {
     TEST_ASSERT_EQUAL(TOF_RAW_OUT_OF_RANGE, tof_classify(2001, 0).status);
 }
 
+
+// The same byte strings are asserted in android-app FramesTest.kt.
+static void test_image_header_v2_bytes() {
+    img_header_t h = {2, IMG_FLAG_QUESTION | IMG_FLAG_RETRIED, 0x1234, 30000, 0xCBF43926u, 640, 480};
+    uint8_t b[IMG_HDR_V2_LEN];
+    TEST_ASSERT_EQUAL(16, img_header_pack(&h, b));
+    const uint8_t want[] = {0x02, 0x03, 0x34, 0x12, 0x30, 0x75, 0x00, 0x00, 0x26, 0x39, 0xF4, 0xCB, 0x80, 0x02, 0xE0, 0x01};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, b, 16);
+}
+
+static void test_audio_header_roundtrip_and_bytes() {
+    audio_header_t h = {STREAM_SPEECH, AUDIO_FLAG_START, 0xFFFE, -1234, 37, AUDIO_CODEC_ADPCM};
+    uint8_t b[AUDIO_HDR_LEN];
+    audio_header_pack(&h, b);
+    const uint8_t want[] = {0x02, 0x01, 0xFE, 0xFF, 0x2E, 0xFB, 0x25, 0x01};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, b, 8);
+    audio_header_t u;
+    TEST_ASSERT_EQUAL(0, audio_header_unpack(b, 8, &u));
+    TEST_ASSERT_EQUAL_INT16(-1234, u.predictor);
+    TEST_ASSERT_EQUAL_UINT16(0xFFFE, u.seq);
+    TEST_ASSERT_EQUAL(-1, audio_header_unpack(b, 7, &u));
+}
+
+static void test_caps_bytes() {
+    caps_t c = {2, 0, 4, 0, FEAT_CAMERA | FEAT_SPEAKER | FEAT_MIC, 16000, 400, AUDIO_CODEC_ADPCM, TOF_TYPE_VL53L0X,
+                9, 60, 50, 500, 80, 16, 5};
+    uint8_t b[CAPS_LEN];
+    TEST_ASSERT_EQUAL(25, caps_pack(&c, b));
+    const uint8_t want[] = {2, 0, 4, 0, 0x0D, 0, 0, 0, 0x80, 0x3E, 0x90, 0x01, 1, 1, 9, 60, 50, 0xF4, 0x01, 80, 0, 16, 0, 5, 0};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(want, b, 25);
+}
+
+static void test_seq_wraparound() {
+    TEST_ASSERT_TRUE(seq_before(10, 20));
+    TEST_ASSERT_FALSE(seq_before(20, 20));
+    TEST_ASSERT_TRUE(seq_before(65530, 5));   // wrapped
+    TEST_ASSERT_FALSE(seq_before(5, 65530));
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_crc32_check_value);
@@ -84,5 +124,9 @@ int main(int, char**) {
     RUN_TEST(test_tof_median_spread_and_flags);
     RUN_TEST(test_tof_too_few_valid_is_invalid);
     RUN_TEST(test_tof_range_limits);
+    RUN_TEST(test_image_header_v2_bytes);
+    RUN_TEST(test_audio_header_roundtrip_and_bytes);
+    RUN_TEST(test_caps_bytes);
+    RUN_TEST(test_seq_wraparound);
     return UNITY_END();
 }
