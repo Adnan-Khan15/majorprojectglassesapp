@@ -71,6 +71,22 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     /** Photos arriving from the glasses (header, progress, completed image or failure). */
     val captures: SharedFlow<CaptureEvent> = _captures.asSharedFlow()
 
+    private val _events = MutableSharedFlow<GlassesEvent>(extraBufferCapacity = 256)
+    /** Protocol v2 events (button, ToF, playback, credits, errors, ...). */
+    val events: SharedFlow<GlassesEvent> = _events.asSharedFlow()
+
+    private val _audioUp = MutableSharedFlow<ByteArray>(extraBufferCapacity = 2048)
+    /** Raw AUDIO_UP frames (mic audio, throughput test payload). */
+    val audioUp: SharedFlow<ByteArray> = _audioUp.asSharedFlow()
+
+    private val _caps = MutableStateFlow<Frames.Caps?>(null)
+    /** What the connected glasses can do (null until the v2 handshake answers, or v1 firmware). */
+    val caps: StateFlow<Frames.Caps?> = _caps.asStateFlow()
+
+    /** ToF results by image id: the board sends them after the image (protocol v2). */
+    private val tofWaiters = java.util.concurrent.ConcurrentHashMap<Int, kotlinx.coroutines.CompletableDeferred<TofReading>>()
+    private val resendRequested = java.util.Collections.synchronizedSet(HashSet<Int>())
+
     private val assembler = ImageAssembler { SystemClock.elapsedRealtime() }
     private var stallWatchdog: Job? = null
 
@@ -100,7 +116,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             }
             val name = device.name ?: GlassesProtocol.DEVICE_NAME
             setState(LinkState.Connecting(name))
-            val mgr = GlassesBleManager(context, ::onControl, ::onImageChunk, ::log)
+            val mgr = GlassesBleManager(context, ::onControl, ::onImageChunk, ::onEvent, ::onAudioUp, ::log)
             manager = mgr
             try {
                 mgr.connect(device)
@@ -111,8 +127,10 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 failures = 0
                 setState(LinkState.Connected(name, mgr.negotiatedMtu))
                 log("Connected to $name (${device.address}), MTU ${mgr.negotiatedMtu}")
+                if (mgr.hasV2) sendCommand(Frames.cmd(Frames.CMD_GET_CAPS))
                 mgr.stateAsFlow().first { it is ConnectionState.Disconnected }
                 log("Glasses disconnected")
+                _caps.value = null
                 emitAll(assembler.abort("glasses disconnected"))
             } catch (e: Exception) {
                 failures++
@@ -163,7 +181,8 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     private fun onControl(bytes: ByteArray) {
         val events = assembler.onHeader(bytes)
         events.filterIsInstance<CaptureEvent.Started>().forEach {
-            log("← CONTROL header: photo ${it.totalBytes} bytes, distance ${it.distanceMm?.let { mm -> "$mm mm" } ?: "no reading"}")
+            log("← CONTROL header: photo ${it.imageId?.let { id -> "$id, " } ?: ""}${it.totalBytes} bytes" +
+                (it.v1Tof?.let { t -> ", distance ${if (t.isValid) "${t.medianMm} mm" else "no reading"} (v1 firmware)" } ?: ""))
         }
         emitAll(events)
         armStallWatchdog()
@@ -189,12 +208,80 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
             when (e) {
                 is CaptureEvent.Completed -> log("← IMAGE_DATA complete: ${e.jpeg.size} bytes in ${e.transferMs} ms " +
                     "(%.1f KB/s)".format(e.jpeg.size / 1.024 / e.transferMs.coerceAtLeast(1)))
-                is CaptureEvent.Failed -> log("Photo transfer failed: ${e.reason}")
+                is CaptureEvent.Failed -> {
+                    log("Photo transfer failed: ${e.reason}")
+                    // A checksum mismatch with every byte present: ask once for the same photo again.
+                    if (e.crcMismatch && e.imageId != null && resendRequested.add(e.imageId)) {
+                        log("→ asking the glasses to resend photo ${e.imageId}")
+                        scope.launch { sendCommand(Frames.cmdU16(Frames.CMD_RESEND_IMAGE, e.imageId)) }
+                        continue  // not a failure yet: the resend will arrive as a new capture
+                    }
+                }
                 else -> Unit
             }
             _captures.tryEmit(e)
         }
     }
+
+    private fun onEvent(bytes: ByteArray) {
+        val e = Frames.parseEvent(bytes) ?: return log("Malformed EVENT (${bytes.size} bytes)")
+        when (e) {
+            is GlassesEvent.CapsEvent -> {
+                _caps.value = e.caps
+                log("Glasses firmware ${e.caps.firmware}, protocol v${e.caps.protocol}: camera=${e.caps.hasCamera} " +
+                    "ToF=${e.caps.hasTof} speaker=${e.caps.hasSpeaker} mic=${e.caps.hasMic}, reset reason ${e.caps.resetReason}" +
+                    if (e.caps.brownoutReset) " (BROWNOUT)" else "")
+            }
+            is GlassesEvent.Tof -> {
+                log("← ToF for image ${e.imageId}: ${e.reading.medianMm} mm, ${e.reading.validCount}/${e.reading.sampleCount} valid, " +
+                    "spread ${e.reading.spreadMm} mm, flags 0x%02x".format(e.reading.flags))
+                tofWaiters.getOrPut(e.imageId) { kotlinx.coroutines.CompletableDeferred() }.complete(e.reading)
+            }
+            is GlassesEvent.Error -> log("← Glasses error ${e.code}: ${e.text}")
+            is GlassesEvent.PhotoCaptured -> log("← Photo ${e.imageId} captured: ${e.size} bytes, ${e.pressToCaptureMs} ms after press" +
+                if (e.rejectedFirstLen > 0) " (first frame was only ${e.rejectedFirstLen} bytes, retried)" else "")
+            is GlassesEvent.ImageAborted -> emitAll(assembler.abort("glasses aborted the photo"))
+            is GlassesEvent.Credits, is GlassesEvent.MicLevel -> Unit  // too frequent to log
+            else -> log("← $e")
+        }
+        _events.tryEmit(e)
+    }
+
+    private fun onAudioUp(bytes: ByteArray) {
+        _audioUp.tryEmit(bytes)
+    }
+
+    /** Waits for the ToF reading the glasses send after image [imageId]; MISSING on timeout. */
+    suspend fun awaitTof(imageId: Int, timeoutMs: Long): TofReading {
+        val d = tofWaiters.getOrPut(imageId) { kotlinx.coroutines.CompletableDeferred() }
+        return (withTimeoutOrNull(timeoutMs) { d.await() } ?: TofReading.MISSING).also {
+            tofWaiters.remove(imageId)
+            if (tofWaiters.size > 32) tofWaiters.clear()  // never grows unbounded
+        }
+    }
+
+    val isV2: Boolean get() = manager?.hasV2 == true
+
+    /** Sends a COMMAND (protocol v2). False if not connected, v1 firmware, or the write failed. */
+    suspend fun sendCommand(bytes: ByteArray): Boolean {
+        val mgr = manager ?: return false
+        if (!mgr.hasV2) return false
+        return try {
+            withTimeout(WRITE_TIMEOUT_MS) { mgr.writeCommand(bytes) }
+            true
+        } catch (e: Exception) {
+            log("COMMAND 0x%02x failed: ${e.message ?: e::class.simpleName}".format(bytes.firstOrNull() ?: 0))
+            false
+        }
+    }
+
+    /** Writes one AUDIO_DOWN frame (write without response). */
+    suspend fun writeAudioFrame(frame: ByteArray): Boolean {
+        val mgr = manager ?: return false
+        return try { mgr.writeAudioDown(frame); true } catch (e: Exception) { false }
+    }
+
+    suspend fun request2mPhy(enable: Boolean) { manager?.request2mPhy(enable) }
 
     /** Writes the composed sentence to the glasses. Returns false if not connected or the write failed. */
     suspend fun sendResultText(text: String): Boolean {

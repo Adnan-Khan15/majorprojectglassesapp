@@ -5,9 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.util.Log
+import com.smartglasses.app.metrics.InteractionTimeline
+import com.smartglasses.app.metrics.Stage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,16 +22,16 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 sealed interface ModelState {
-    data class Unpacking(val progress: Float) : ModelState
+    /** No verified model file yet (see ModelStore). ML Kit labels are used meanwhile. */
+    data class NoModel(val reason: String) : ModelState
     data object Loading : ModelState
     data class Ready(val engine: String, val loadMs: Long) : ModelState
-    /** Gemma unavailable; ML Kit labels are used instead so captures still work. */
+    /** A model file is present but Gemma couldn't start on this phone; ML Kit labels are used instead. */
     data class Fallback(val reason: String) : ModelState
-    data class Failed(val reason: String) : ModelState
 }
 
+/** What the model saw. The spoken sentence (with distance) is composed by the caller. */
 data class Description(
-    val sentence: String,
     val objectPhrase: String,
     val ocrText: String,
     val engine: String,
@@ -39,55 +43,71 @@ data class Description(
 /**
  * Turns a photo (+ optional distance) into the sentence the glasses speak.
  * Lives for the whole process so the model is loaded once, not per Activity.
+ * Follows [store]: loads Gemma when a verified model appears, unloads it when deleted.
  */
-class SceneDescriber(context: Context, private val scope: CoroutineScope) {
+class SceneDescriber(context: Context, private val scope: CoroutineScope, private val store: ModelStore) {
 
-    private val installer = ModelInstaller(context)
     private val gemma = GemmaVision(context.cacheDir)
     private val mlkit = MlKitVision()
 
-    private val _state = MutableStateFlow<ModelState>(ModelState.Loading)
+    private val _state = MutableStateFlow<ModelState>(ModelState.NoModel("Checking for the AI model…"))
     val state: StateFlow<ModelState> = _state.asStateFlow()
 
-    private var prepareJob: Job? = null
+    private var watchJob: Job? = null
+    private var loadedPath: String? = null
 
-    /** Idempotent: unpacks (first launch only) and loads the model. */
+    /** Idempotent: checks storage for the model and starts following its status. */
     fun prepare() {
-        if (prepareJob?.isActive == true) return
-        val s = _state.value
-        if (s is ModelState.Ready || s is ModelState.Fallback) return
-        prepareJob = scope.launch {
-            try {
-                if (!installer.isInstalled()) {
-                    _state.value = ModelState.Unpacking(0f)
-                    installer.install { _state.value = ModelState.Unpacking(it) }
-                }
-                _state.value = ModelState.Loading
-                val t0 = SystemClock.elapsedRealtime()
-                withTimeout(LOAD_TIMEOUT_MS) { gemma.load(installer.modelFile) }
-                val ms = SystemClock.elapsedRealtime() - t0
-                Log.d(TAG, "Gemma loaded on ${gemma.backendName} in $ms ms")
-                _state.value = ModelState.Ready(gemma.backendName, ms)
-            } catch (t: Throwable) {
-                Log.e(TAG, "Model prepare failed", t)
-                val reason = t.message ?: t::class.simpleName ?: "unknown error"
-                // Storage problems are worth surfacing as a hard failure; a model that won't
-                // start on this phone still leaves ML Kit available.
-                _state.value = if (t is IllegalStateException && reason.startsWith("Not enough"))
-                    ModelState.Failed(reason) else ModelState.Fallback(reason)
-            }
+        if (watchJob?.isActive == true) return
+        watchJob = scope.launch { store.status.collectLatest(::onStoreStatus) }
+        scope.launch { store.refresh() }
+    }
+
+    private suspend fun onStoreStatus(s: ModelStatus) {
+        when (s) {
+            is ModelStatus.Ready -> if (loadedPath != s.path || _state.value !is ModelState.Ready) load(s.path)
+            is ModelStatus.Missing -> { unload(); _state.value = ModelState.NoModel(s.message ?: "No AI model on this phone yet.") }
+            is ModelStatus.Corrupt -> { unload(); _state.value = ModelState.NoModel(s.reason) }
+            is ModelStatus.Importing, is ModelStatus.Verifying ->
+                if (_state.value !is ModelState.Ready) _state.value = ModelState.NoModel("Preparing the AI model…")
         }
     }
 
-    fun retry() {
+    private suspend fun load(path: String) {
+        unload()
         _state.value = ModelState.Loading
-        prepare()
+        try {
+            val t0 = SystemClock.elapsedRealtime()
+            withTimeout(LOAD_TIMEOUT_MS) { gemma.load(java.io.File(path)) }
+            val ms = SystemClock.elapsedRealtime() - t0
+            loadedPath = path
+            Log.d(TAG, "Gemma loaded on ${gemma.backendName} in $ms ms")
+            _state.value = ModelState.Ready(gemma.backendName, ms)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.e(TAG, "Gemma load failed", t)
+            _state.value = ModelState.Fallback(t.message ?: t::class.simpleName ?: "unknown error")
+        }
     }
 
-    val canDescribe: Boolean
-        get() = _state.value.let { it is ModelState.Ready || it is ModelState.Fallback }
+    private suspend fun unload() {
+        if (loadedPath != null) { gemma.close(); loadedPath = null }
+    }
 
-    suspend fun describe(jpeg: ByteArray, distanceMm: Int?): Description = withContext(Dispatchers.Default) {
+    /** Tries loading Gemma again after a Fallback. */
+    fun retry() {
+        scope.launch { store.readyPath()?.let { load(it) } ?: store.refresh() }
+    }
+
+    /** False only while Gemma is loading; otherwise Gemma or the ML Kit fallback can answer. */
+    val canDescribe: Boolean
+        get() = _state.value !is ModelState.Loading
+
+    suspend fun describe(
+        jpeg: ByteArray,
+        timeline: InteractionTimeline? = null,
+    ): Description = withContext(Dispatchers.Default) {
         check(canDescribe) { "Model is not ready yet" }
         val start = SystemClock.elapsedRealtime()
 
@@ -98,21 +118,26 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope) {
         // OCR on the full-resolution image reads small print far better than at 512 px.
         val ocrText = runCatching { mlkit.readText(decodeDownscaled(jpeg, OCR_MAX_EDGE_PX)) }.getOrDefault("")
         val ocrMs = SystemClock.elapsedRealtime() - ocrStart
+        timeline?.mark(Stage.OCR_DONE)
 
         val modelStart = SystemClock.elapsedRealtime()
         val engine: String
         val phrase: String = if (_state.value is ModelState.Ready) {
             engine = "Gemma 4 E2B (${gemma.backendName})"
-            cleanPhrase(withTimeout(INFERENCE_TIMEOUT_MS) { gemma.describe(smallJpeg, ocrText) })
+            cleanPhrase(withTimeout(INFERENCE_TIMEOUT_MS) {
+                gemma.describe(smallJpeg, ocrText) { timeline?.mark(Stage.FIRST_MODEL_OUTPUT) }
+            })
         } else {
             engine = "ML Kit labels (fallback)"
             fallbackPhrase(mlkit.topLabel(small), ocrText)
         }
         val modelMs = SystemClock.elapsedRealtime() - modelStart
+        timeline?.mark(Stage.FIRST_MODEL_OUTPUT)  // ML Kit fallback has no streaming: first output = done
+        timeline?.mark(Stage.ANSWER_COMPLETE)
+        timeline?.put("engine", engine)
 
-        val sentence = compose(phrase, distanceMm)
-        Description(sentence, phrase, ocrText, engine, ocrMs, modelMs, SystemClock.elapsedRealtime() - start)
-            .also { Log.d(TAG, "Described in ${it.totalMs} ms (ocr ${it.ocrMs}, model ${it.modelMs}): ${it.sentence}") }
+        Description(phrase, ocrText, engine, ocrMs, modelMs, SystemClock.elapsedRealtime() - start)
+            .also { Log.d(TAG, "Described in ${it.totalMs} ms (ocr ${it.ocrMs}, model ${it.modelMs}): ${it.objectPhrase}") }
     }
 
     companion object {

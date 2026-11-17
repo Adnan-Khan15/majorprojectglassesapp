@@ -39,6 +39,7 @@ import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.assistant.AssistantRun
 import com.smartglasses.app.assistant.RunTiming
 import com.smartglasses.app.assistant.Source
+import com.smartglasses.app.ble.TofReading
 
 @Composable
 fun ModelSection(vm: AssistantViewModel = viewModel()) {
@@ -47,7 +48,7 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(vm::describePhoto)
     }
-    val ready = model is ModelState.Ready || model is ModelState.Fallback
+    val ready = model !is ModelState.Loading
     val busy = run is AssistantRun.Describing || run is AssistantRun.Receiving
 
     Column(
@@ -62,10 +63,9 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
             Text("On-device AI", style = MaterialTheme.typography.titleMedium)
         }
         when (val m = model) {
-            is ModelState.Unpacking -> {
-                Text("First launch: unpacking the AI model… ${(m.progress * 100).toInt()}%")
-                LinearProgressIndicator(progress = { m.progress }, Modifier.fillMaxWidth())
-                Text("This happens once and takes about a minute.",
+            is ModelState.NoModel -> {
+                Text(m.reason, color = StatusColors.busy)
+                Text("Until the model is set up, photos are described with the basic ML Kit labeller.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             ModelState.Loading -> {
@@ -82,11 +82,9 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
                 Text(m.reason, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = vm::retryModel) { Text("Try loading Gemma again") }
             }
-            is ModelState.Failed -> {
-                Text(m.reason, color = StatusColors.bad)
-                Button(onClick = vm::retryModel) { Text("Retry") }
-            }
         }
+
+        ModelSetupCard()
 
         Button(
             onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -116,7 +114,7 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
             )
         }
         is AssistantRun.Describing -> ResultRow(run.preview) {
-            SourceLabel(run.source, run.distanceMm)
+            SourceLabel(run.source, null)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
@@ -124,8 +122,8 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
             }
         }
         is AssistantRun.Done -> ResultRow(run.preview) {
-            SourceLabel(run.source, run.distanceMm)
-            Text("\u201c${run.result.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
+            SourceLabel(run.source, run.tof)
+            Text("\u201c${run.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
             Text(timingLine(run.timing), style = MaterialTheme.typography.bodySmall)
             Text(
                 "${run.result.engine} · spoken on ${run.announcer}",
@@ -149,9 +147,14 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SourceLabel(source: Source, distanceMm: Int?) {
+private fun SourceLabel(source: Source, tof: TofReading?) {
     val text = when (source) {
-        Source.GLASSES -> "From glasses · " + (distanceMm?.let { SceneDescriber.formatDistance(it) } ?: "no distance reading")
+        Source.GLASSES -> "From glasses · " + when {
+            tof == null -> "distance pending"
+            tof.isValid -> SceneDescriber.formatDistance(tof.medianMm) + " (${tof.validCount}/${tof.sampleCount} samples, ±${tof.spreadMm / 2} mm)"
+            tof.noSensor -> "no distance sensor"
+            else -> "no reliable distance"
+        }
         Source.GALLERY -> "From gallery (no distance sensor)"
     }
     Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)

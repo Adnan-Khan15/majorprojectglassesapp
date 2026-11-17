@@ -44,6 +44,7 @@ fun MainScreen() {
             item { Spacer(Modifier.size(16.dp)); Text("Glasses", style = MaterialTheme.typography.headlineMedium) }
             item { Spacer(Modifier.size(8.dp)); ConnectionBanner(state) }
             item { Spacer(Modifier.size(8.dp)); ModelSection() }
+            item { Spacer(Modifier.size(8.dp)); LinkTestCard() }
             item { Spacer(Modifier.size(12.dp)); Text("Link log", style = MaterialTheme.typography.titleMedium) }
             items(log) { line ->
                 Row {

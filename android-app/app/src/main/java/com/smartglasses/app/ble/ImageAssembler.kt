@@ -1,26 +1,35 @@
 package com.smartglasses.app.ble
 
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.util.zip.CRC32
 
 /** Progress of one capture arriving from the glasses. */
 sealed interface CaptureEvent {
-    data class Started(val totalBytes: Int, val distanceMm: Int?) : CaptureEvent
+    /** [v1Tof] is set only by v1 firmware, which put the distance in the header. */
+    data class Started(val totalBytes: Int, val imageId: Int?, val question: Boolean, val v1Tof: TofReading?) : CaptureEvent
     data class Progress(val receivedBytes: Int, val totalBytes: Int) : CaptureEvent
-    data class Completed(val jpeg: ByteArray, val distanceMm: Int?, val transferMs: Long) : CaptureEvent
-    data class Failed(val reason: String) : CaptureEvent
+    data class Completed(
+        val jpeg: ByteArray,
+        val imageId: Int?,
+        val transferMs: Long,
+        val question: Boolean,
+        val v1Tof: TofReading?,
+        val retriedSmallFrame: Boolean,
+    ) : CaptureEvent
+    /** [crcMismatch]: every byte arrived but the checksum is wrong, so a resend may help. */
+    data class Failed(val reason: String, val imageId: Int? = null, val crcMismatch: Boolean = false) : CaptureEvent
 }
 
 /**
- * Reassembles one capture from the CONTROL header + ordered IMAGE_DATA chunks
- * (see GlassesProtocol). Synchronized: chunks arrive on Nordic's
- * callback thread while the stall watchdog may abort from another. Time is injected for testing.
+ * Reassembles one capture from the CONTROL header (v1 or v2, see [Frames]) plus the
+ * ordered IMAGE_DATA chunks, and verifies it (JPEG markers; CRC32 for v2).
+ * Synchronized: chunks arrive on Nordic's callback thread while the stall watchdog
+ * may abort from another. Time is injected for testing.
  */
 class ImageAssembler(private val now: () -> Long) {
 
+    private var header: Frames.ImageHeader? = null
     private var buffer: ByteArray? = null
     private var received = 0
-    private var distanceMm: Int? = null
     private var startedAt = 0L
 
     val inProgress: Boolean @Synchronized get() = buffer != null
@@ -28,57 +37,64 @@ class ImageAssembler(private val now: () -> Long) {
     @Synchronized
     fun onHeader(bytes: ByteArray): List<CaptureEvent> {
         val events = mutableListOf<CaptureEvent>()
-        if (buffer != null) {
-            events += CaptureEvent.Failed("new capture started before the previous photo finished (${received} of ${buffer!!.size} bytes)")
-        }
+        buffer?.let { events += CaptureEvent.Failed("new capture started before the previous photo finished ($received of ${it.size} bytes)", header?.imageId) }
         reset()
-        if (bytes.size != GlassesProtocol.CONTROL_HEADER_LEN) {
-            return events + CaptureEvent.Failed("unexpected CONTROL header length ${bytes.size}")
+        val h = Frames.parseImageHeader(bytes)
+            ?: return events + CaptureEvent.Failed("unexpected CONTROL header (${bytes.size} bytes)")
+        if (h.size <= 0 || h.size > GlassesProtocol.MAX_IMAGE_BYTES) {
+            return events + CaptureEvent.Failed("implausible image size ${h.size} bytes", h.imageId)
         }
-        val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        val size = bb.int.toLong() and 0xFFFF_FFFFL
-        val mm = bb.short.toInt() and 0xFFFF
-        if (size <= 0 || size > GlassesProtocol.MAX_IMAGE_BYTES) {
-            return events + CaptureEvent.Failed("implausible image size $size bytes")
-        }
-        buffer = ByteArray(size.toInt())
-        distanceMm = mm.takeIf { it > 0 }  // 0 = no valid ToF reading
+        header = h
+        buffer = ByteArray(h.size.toInt())
         startedAt = now()
-        return events + CaptureEvent.Started(size.toInt(), distanceMm)
+        val v1Tof = if (h.version == 1) TofReading.fromV1(h.v1DistanceMm) else null
+        return events + CaptureEvent.Started(h.size.toInt(), h.imageId, h.flags and Frames.IMG_FLAG_QUESTION != 0, v1Tof)
     }
 
     @Synchronized
     fun onChunk(bytes: ByteArray): List<CaptureEvent> {
         val buf = buffer ?: return emptyList()  // stray chunk with no header: ignore
+        val h = header!!
         if (received + bytes.size > buf.size) {
             val reason = "received more data than announced (${received + bytes.size} > ${buf.size} bytes)"
             reset()
-            return listOf(CaptureEvent.Failed(reason))
+            return listOf(CaptureEvent.Failed(reason, h.imageId))
         }
         System.arraycopy(bytes, 0, buf, received, bytes.size)
         received += bytes.size
         if (received < buf.size) return listOf(CaptureEvent.Progress(received, buf.size))
 
         val transferMs = now() - startedAt
-        val mm = distanceMm
         reset()
-        if (!looksLikeJpeg(buf)) return listOf(CaptureEvent.Failed("received ${buf.size} bytes but they are not a valid JPEG"))
-        return listOf(CaptureEvent.Completed(buf, mm, transferMs))
+        h.crc32?.let { want ->
+            val got = CRC32().apply { update(buf) }.value
+            if (got != want) {
+                return listOf(CaptureEvent.Failed("checksum mismatch (got %08x, expected %08x)".format(got, want), h.imageId, crcMismatch = true))
+            }
+        }
+        if (!looksLikeJpeg(buf)) return listOf(CaptureEvent.Failed("received ${buf.size} bytes but they are not a valid JPEG", h.imageId))
+        return listOf(CaptureEvent.Completed(
+            buf, h.imageId, transferMs,
+            question = h.flags and Frames.IMG_FLAG_QUESTION != 0,
+            v1Tof = if (h.version == 1) TofReading.fromV1(h.v1DistanceMm) else null,
+            retriedSmallFrame = h.flags and Frames.IMG_FLAG_RETRIED != 0,
+        ))
     }
 
-    /** Abandons an in-progress transfer (disconnect, stall). */
+    /** Abandons an in-progress transfer (disconnect, stall, glasses aborted). */
     @Synchronized
     fun abort(reason: String): List<CaptureEvent> {
-        if (buffer == null) return emptyList()
-        val detail = "$reason after ${received} of ${buffer!!.size} bytes"
+        val buf = buffer ?: return emptyList()
+        val detail = "$reason after $received of ${buf.size} bytes"
+        val id = header?.imageId
         reset()
-        return listOf(CaptureEvent.Failed(detail))
+        return listOf(CaptureEvent.Failed(detail, id))
     }
 
     private fun reset() {
+        header = null
         buffer = null
         received = 0
-        distanceMm = null
     }
 
     private fun looksLikeJpeg(b: ByteArray) =

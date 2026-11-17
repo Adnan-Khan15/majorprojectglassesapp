@@ -19,5 +19,10 @@ esp32-firmware/.pio/
 android-app/.kotlin/
 CameraBLE.zip
 
-# 2.6 GB model: fetched by scripts/fetch-model.sh, never committed
+# The 2.6 GB model is never committed (users import it; developers use scripts/fetch-model.sh)
+*.litertlm
 android-app/app/src/main/assets/models/
+
+# Python
+__pycache__/
+*.pyc

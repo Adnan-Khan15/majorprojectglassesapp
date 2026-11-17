@@ -1,0 +1,29 @@
+// Onboard camera: VGA JPEG, mounted upside down. Each capture is copied into a
+// PSRAM buffer so the frame buffer goes straight back to the driver and the last
+// photo can be resent if the phone reports a bad transfer.
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+
+namespace camera {
+
+struct Shot {
+    const uint8_t* jpeg = nullptr;
+    size_t len = 0;
+    uint16_t width = 0, height = 0;
+    uint16_t id = 0;            // increments per capture (image_id on the wire)
+    uint32_t index = 0;         // captures since boot
+    uint32_t takenAtMs = 0;     // millis() when the frame was obtained
+    uint32_t sinceInitMs = 0;   // ms since camera init (diagnostics)
+    size_t firstLen = 0;        // size of a rejected too-small first frame, 0 if none
+    uint8_t sensorPid = 0;
+};
+
+bool begin();
+bool ok();
+/** Grabs a frame (retrying once if suspiciously small). False on failure. */
+bool capture(Shot& out);
+/** The last successful capture (valid until the next capture). */
+const Shot& last();
+
+}  // namespace camera
