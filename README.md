@@ -20,7 +20,7 @@ This is a BE major project with two parts:
 ```
  ┌──────────────── Glasses (XIAO ESP32S3 Sense) ───────────────┐          ┌──────────── Android phone ────────────┐
  │                                                             │          │                                       │
- │  button press ─► camera (JPEG) + VL53L1X ToF distance ──────┼── BLE ──►│  reassemble image                     │
+ │  button press ─► camera (JPEG) + VL53L0X ToF distance ──────┼── BLE ──►│  reassemble image                     │
  │                                                             │          │  ML Kit OCR  (reads text / brands)    │
  │                                                             │          │  Gemma 4 E2B vision model (what it is)│
  │  MAX98357A speaker ◄─ I2S ◄─ SAM speech synth ◄─────────────┼── BLE ◄──│  compose sentence                     │
@@ -150,27 +150,39 @@ cd esp32-firmware
 pio run -t upload -t monitor      # build, flash, then open the serial monitor (115200 baud)
 ```
 
-### Button wiring
+### Wiring (Phase 3)
 
-This matches the original CameraBLE bring-up sketch:
+| Part | Pin | Notes |
+|---|---|---|
+| Push-button | **D0** (GPIO1) to **3V3** | Pressing drives D0 HIGH; the internal pull-down holds it LOW |
+| Status light | onboard **user LED** (GPIO21) | Lit while a photo is captured and sent. Nothing to wire |
+| MAX98357A amp | **BCLK → D4** (GPIO5), **LRC → D5** (GPIO6), **DIN → D3** (GPIO4), VIN → 5V, GND → GND | 1 W / 8 Ω speaker on the amp's + and − terminals |
+| VL53L0X distance sensor | **SDA → D10** (GPIO9), **SCL → D8** (GPIO7), VIN → 3V3, GND → GND | Replaces the earlier VL53L1X |
+| Microphone | onboard PDM mic on the Sense board (GPIO42/41) | Nothing to wire |
+| Camera | onboard OV2640/OV3660 | Mounted upside down; the firmware flips the image |
 
-| Pin | Connect to |
+- **Don't insert a microSD card.** On the Sense expansion board, GPIO7/8/9 and GPIO21 are the SD card's lines. The firmware uses them for the distance sensor and the LED, and never mounts the card.
+- **Recommended:** a **100 µF capacitor** across the amp's VIN and GND, close to the amp. Speaker current peaks can dip the supply; the board logs a brownout as `reset reason 9` at boot.
+- D1, D2 and D6 are unused and pulled down in firmware.
+- If the distance sensor isn't connected, the glasses still work and the sentence leaves out the distance.
+
+To change pins, edit [`include/pins.h`](esp32-firmware/include/pins.h).
+
+### Serial test console (115200 baud)
+
+| Type | Does |
 |---|---|
-| **D0** | Push-button to **3V3**. Pressing it drives D0 HIGH; the internal pull-down holds it LOW otherwise. |
-| **D8** | Status LED (with a resistor) to GND. It stays lit while a photo is being captured and sent. |
-| **D4 (SDA), D5 (SCL)** | VL53L1X distance sensor (plus 3V3 and GND), as in `hardware_bringup.ino` |
-| D1–D3, D6 | Unused for now; pulled down in firmware so they can't pick up noise. The I2S speaker pins come off this list in Phase 7. |
-
-The camera is the onboard OV2640/OV3660, set to VGA JPEG and flipped 180° because it's mounted upside down. If the distance sensor isn't connected, the glasses still work and the sentence leaves out the distance.
-
-To change pins, edit the constants at the top of [`src/main.cpp`](esp32-firmware/src/main.cpp).
-No button yet? Type **`p`** in the serial monitor to simulate a press.
-
----
+| `p` | Simulate a button tap |
+| `caps` + Enter | What's connected and working, settings, last reset reason |
+| `tone 1000 500` + Enter | Play a 1 kHz test tone for 500 ms |
+| `vol 60` / `ceil 50` + Enter | Volume (% of the ceiling) / loudness ceiling (% of full scale, default 50) |
+| `mic 3` + Enter | Microphone level meter for 3 s |
+| `tof 10` + Enter | 10 distance readings, then median and spread |
+| `?` + Enter | Full list |
 
 ## Test: button press → spoken sentence
 
-1. Flash the firmware and open the serial monitor at 115200 baud. You should see `[CAM] camera OK`, `[TOF] VL53L1X OK` and `advertising started … ok`.
+1. Flash the firmware and open the serial monitor at 115200 baud. You should see `[CAM] camera OK`, `[TOF] VL53L0X OK`, `[SPK] I2S1 TX ready`, `[MIC] PDM mic ready` and `advertising started … ok`, and hear a short beep.
 2. Open the app and wait for both of these:
    - the banner turns green: **Connected to SmartGlasses**
    - the AI card says **Gemma 4 E2B ready on GPU**
@@ -253,7 +265,7 @@ android-app/app/src/main/java/com/smartglasses/app/
 esp32-firmware/
 ├── platformio.ini
 ├── include/glasses_protocol.h # UUIDs: the same contract, firmware side
-├── src/main.cpp               # button → camera + VL53L1X → header + chunked JPEG; logs RESULT_TEXT
+├── src/main.cpp               # button → camera + VL53L0X → BLE; camera/tof/speaker/mic/console modules beside it
 └── reference/hardware_bringup.ino  # original camera + ToF bring-up sketch the firmware is built on
 ```
 
@@ -267,8 +279,8 @@ esp32-firmware/
 | "Connect failed: …" repeating | Toggle phone Bluetooth off and on, then reset the board |
 | Board not detected over USB | Use a data-capable USB-C cable; hold **BOOT** while plugging in |
 | Button press says `not sent: connected=0` | The phone isn't connected yet; wait for the green banner |
-| `[TOF] !! VL53L1X FAILED` | Check SDA→D4, SCL→D5, 3V3 and GND. Captures still work, just without a distance |
-| `[TOF] no valid reading` | The object is too close (under ~4 cm), too far (over ~4 m), or too dark or shiny for the sensor |
+| `[TOF] !! VL53L0X init failed` | Check SDA→D10, SCL→D8, 3V3 and GND, and that no microSD card is inserted. Captures still work, just without a distance |
+| No distance in the sentence | The VL53L0X reads about 5 cm to 1.2 m, straight ahead only. Dark, shiny or far objects often give no reading. Try `tof 10` in the serial monitor |
 | Card: "photo … didn't arrive complete" | The link dropped mid-transfer. The board resets the connection, so wait for the green banner (a few seconds) and press again. Send the serial log if it keeps happening |
 | `[CAM] warning: very small JPEG` | The photo is nearly black. Check the lens isn't covered and the room isn't too dark |
 | Phone doesn't speak | Check the media volume; install or enable a text-to-speech engine in Android settings (Google Speech Services) |

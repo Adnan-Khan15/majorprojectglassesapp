@@ -5,7 +5,7 @@ Smart assistive glasses (BE major project). A Seeed XIAO ESP32S3 Sense on the gl
 ## Layout
 - `android-app/`: Kotlin, Jetpack Compose, Nordic BLE library, minSdk 31, arm64 only.
 - `esp32-firmware/`: PlatformIO, Arduino-ESP32 core **2.0.17** (ESP-IDF 4.4, legacy `driver/i2s.h`), NimBLE-Arduino 2.x.
-- `scripts/`: model fetch helper, latency report, test tools. Python tests: `python3 -m unittest discover -s scripts/tests`.
+- `scripts/`: model fetch helper, latency report, ADPCM golden-vector generator (`gen_adpcm_vectors.py` writes the vectors both the C and Kotlin tests use). Python tests: `python3 -m unittest discover -s scripts/tests`.
 - `docs/`: `PHASE3_PLAN.md` (current plan and milestone status), hardware test protocols.
 
 ## Build and test
@@ -14,7 +14,7 @@ Smart assistive glasses (BE major project). A Seeed XIAO ESP32S3 Sense on the gl
 cd android-app && ./gradlew testOfflineDebugUnitTest assembleOfflineRelease   # flavors: offline (no network), withDownload
 # Firmware (needs `pip install platformio`)
 cd esp32-firmware && pio run            # build for the board
-cd esp32-firmware && pio test -e native # host tests of pure C/C++ logic (once added in Phase 3)
+cd esp32-firmware && pio test -e native # host tests of lib/glasses_core (ADPCM, CRC32, ToF filter)
 ```
 
 ## Rules for working in this repo
@@ -25,7 +25,7 @@ cd esp32-firmware && pio test -e native # host tests of pure C/C++ logic (once a
 - **Never commit** model files (`*.litertlm`), keystores, or `local.properties`.
 - One commit per milestone on feature branches; delete dead code rather than keeping two paths.
 
-## Hardware (Phase 3 wiring; the firmware moves to it in milestone M2)
+## Hardware (Phase 3 wiring; single source of truth: `esp32-firmware/include/pins.h`)
 | Function | Pin |
 |---|---|
 | Button | D0 / GPIO1, active HIGH, internal pull-down |

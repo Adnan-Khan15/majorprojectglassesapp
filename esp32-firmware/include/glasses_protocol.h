@@ -2,6 +2,9 @@
 // android-app/.../ble/GlassesProtocol.kt).
 #pragma once
 
+#define FW_VERSION_STR "0.4.0-m2"
+#define PROTOCOL_VERSION 1
+
 #define GLASSES_DEVICE_NAME "SmartGlasses"
 
 #define SERVICE_UUID      "6e1a0001-4b7d-4f2a-9c3e-5a1b2c3d4e5f"

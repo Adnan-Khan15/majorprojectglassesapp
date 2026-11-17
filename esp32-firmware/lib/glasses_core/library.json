@@ -1,0 +1,8 @@
+{
+  "name": "glasses_core",
+  "version": "1.0.0",
+  "description": "Hardware-free logic shared by the board firmware and the native test env: IMA ADPCM, CRC32, ToF filtering, BLE frame layouts.",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": { "flags": "-std=c11" }
+}

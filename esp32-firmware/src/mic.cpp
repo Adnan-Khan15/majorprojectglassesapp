@@ -1,0 +1,162 @@
+#include "mic.h"
+#include <Arduino.h>
+#include <driver/i2s.h>
+#include <math.h>
+#include "pins.h"
+#include "settings.h"
+
+namespace mic {
+
+static constexpr i2s_port_t PORT = I2S_NUM_0;  // PDM RX is only available on I2S0
+static bool isOk = false;
+static TaskHandle_t task = nullptr;
+static volatile bool running = false;
+static volatile bool stopReq = false;
+static BlockFn cb = nullptr;
+static void* cbCtx = nullptr;
+static SemaphoreHandle_t stopped = nullptr;
+
+bool begin() {
+    i2s_config_t cfg = {};
+    cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM);
+    cfg.sample_rate = SAMPLE_RATE;
+    cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+    cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;  // read both slots, choose at runtime
+    cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    cfg.intr_alloc_flags = 0;
+    cfg.dma_buf_count = 8;
+    cfg.dma_buf_len = 256;
+    cfg.use_apll = false;
+    esp_err_t err = i2s_driver_install(PORT, &cfg, 0, nullptr);
+    if (err != ESP_OK) {
+        Serial.printf("[MIC] I2S0 PDM driver install failed: 0x%x\n", err);
+        return isOk = false;
+    }
+    i2s_pin_config_t pins = {};
+    pins.mck_io_num = I2S_PIN_NO_CHANGE;
+    pins.bck_io_num = I2S_PIN_NO_CHANGE;
+    pins.ws_io_num = PIN_PDM_CLK;     // PDM clock goes out on the WS line
+    pins.data_out_num = I2S_PIN_NO_CHANGE;
+    pins.data_in_num = PIN_PDM_DATA;
+    err = i2s_set_pin(PORT, &pins);
+    if (err != ESP_OK) {
+        Serial.printf("[MIC] I2S0 pin config failed: 0x%x\n", err);
+        return isOk = false;
+    }
+    i2s_stop(PORT);  // only clocked while recording / measuring
+    stopped = xSemaphoreCreateBinary();
+    Serial.printf("[MIC] PDM mic ready on I2S0: CLK %d, DATA %d, %lu Hz\n", PIN_PDM_CLK, PIN_PDM_DATA, (unsigned long)SAMPLE_RATE);
+    return isOk = true;
+}
+
+bool ok() { return isOk; }
+bool recording() { return running; }
+
+/** Reads exactly n stereo frames (interleaved L,R). */
+static bool readFrames(int16_t* st, size_t n) {
+    size_t want = n * 4, got = 0;
+    while (got < want) {
+        size_t r = 0;
+        if (i2s_read(PORT, (uint8_t*)st + got, want - got, &r, pdMS_TO_TICKS(200)) != ESP_OK || r == 0) return false;
+        got += r;
+    }
+    return true;
+}
+
+static float acEnergy(const int16_t* st, size_t n, int ch) {
+    double mean = 0, e = 0;
+    for (size_t i = 0; i < n; i++) mean += st[2 * i + ch];
+    mean /= n;
+    for (size_t i = 0; i < n; i++) { double d = st[2 * i + ch] - mean; e += d * d; }
+    return (float)(e / n);
+}
+
+static void micTask(void*) {
+    static int16_t st[BLOCK_SAMPLES * 2];
+    static int16_t mono[BLOCK_SAMPLES];
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        i2s_zero_dma_buffer(PORT);
+        i2s_start(PORT);
+        int ch = -1;
+        // DC-blocking high-pass (y = x - x1 + 0.995 y1): PDM mics have a large DC offset.
+        float x1 = 0, y1 = 0;
+        const float gain = settings::get().micGainX10 / 10.0f;
+        uint32_t blocks = 0;
+        while (!stopReq) {
+            if (!readFrames(st, BLOCK_SAMPLES)) { Serial.println("[MIC] read timeout"); break; }
+            if (ch < 0) {
+                float eL = acEnergy(st, BLOCK_SAMPLES, 0), eR = acEnergy(st, BLOCK_SAMPLES, 1);
+                ch = eR > eL ? 1 : 0;
+                x1 = st[ch];
+                Serial.printf("[MIC] using %s slot (AC energy L %.0f, R %.0f)\n", ch ? "R" : "L", eL, eR);
+            }
+            for (size_t i = 0; i < BLOCK_SAMPLES; i++) {
+                float x = st[2 * i + ch];
+                float y = x - x1 + 0.995f * y1;
+                x1 = x; y1 = y;
+                float v = y * gain;
+                mono[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+            }
+            if (cb) cb(mono, BLOCK_SAMPLES, cbCtx);
+            blocks++;
+        }
+        i2s_stop(PORT);
+        running = false;
+        Serial.printf("[MIC] stopped after %lu blocks (%lu ms)\n", (unsigned long)blocks,
+                      (unsigned long)(blocks * BLOCK_SAMPLES * 1000 / SAMPLE_RATE));
+        xSemaphoreGive(stopped);
+    }
+}
+
+bool start(BlockFn fn, void* ctx) {
+    if (!isOk || running) return false;
+    if (!task) xTaskCreatePinnedToCore(micTask, "mic", 6144, nullptr, 4, &task, 1);
+    cb = fn; cbCtx = ctx;
+    stopReq = false;
+    running = true;
+    xSemaphoreTake(stopped, 0);
+    xTaskNotifyGive(task);
+    return true;
+}
+
+void stop() {
+    if (!running) return;
+    stopReq = true;
+    xSemaphoreTake(stopped, pdMS_TO_TICKS(500));
+}
+
+static float dbfs(float v) { return v <= 1 ? -96.0f : 20.0f * log10f(v / 32768.0f); }
+
+Level measure(uint32_t ms) {
+    Level lv = {-96, -96, -96, -96};
+    if (!isOk || running) return lv;
+    static int16_t st[BLOCK_SAMPLES * 2];
+    i2s_zero_dma_buffer(PORT);
+    i2s_start(PORT);
+    readFrames(st, BLOCK_SAMPLES);  // discard: filter settling
+    double sumL = 0, sumR = 0, meanL = 0, meanR = 0;
+    int peakL = 0, peakR = 0;
+    size_t n = 0;
+    uint32_t t0 = millis();
+    // Two passes over the same blocks would need storage; use running mean from the first block.
+    for (size_t i = 0; i < BLOCK_SAMPLES; i++) { meanL += st[2 * i]; meanR += st[2 * i + 1]; }
+    meanL /= BLOCK_SAMPLES; meanR /= BLOCK_SAMPLES;
+    while (millis() - t0 < ms) {
+        if (!readFrames(st, BLOCK_SAMPLES)) break;
+        for (size_t i = 0; i < BLOCK_SAMPLES; i++) {
+            double l = st[2 * i] - meanL, r = st[2 * i + 1] - meanR;
+            sumL += l * l; sumR += r * r;
+            peakL = max(peakL, (int)fabs(l)); peakR = max(peakR, (int)fabs(r));
+        }
+        n += BLOCK_SAMPLES;
+    }
+    i2s_stop(PORT);
+    if (n) {
+        lv.rmsL = dbfs(sqrtf(sumL / n)); lv.rmsR = dbfs(sqrtf(sumR / n));
+        lv.peakL = dbfs(peakL); lv.peakR = dbfs(peakR);
+    }
+    return lv;
+}
+
+}  // namespace mic

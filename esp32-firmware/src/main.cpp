@@ -1,53 +1,24 @@
-// SmartGlasses firmware — capture + transfer.
-// Button press -> camera JPEG + VL53L1X distance -> CONTROL header indication
-// -> JPEG streamed over IMAGE_DATA indications -> phone describes it and writes
-// the sentence back on RESULT_TEXT, which we log (speech is Phase 7).
+// SmartGlasses firmware: button -> camera JPEG + VL53L0X distance -> BLE -> phone,
+// which describes it and writes the sentence back on RESULT_TEXT.
+// Hardware modules: camera.cpp, tof.cpp, speaker.cpp (I2S1), mic.cpp (I2S0 PDM),
+// console.cpp (serial test commands), settings.cpp (NVS). Pins: include/pins.h.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#include <Wire.h>
-#include <VL53L1X.h>
-#include "esp_camera.h"
+#include "camera.h"
+#include "console.h"
 #include "glasses_protocol.h"
+#include "mic.h"
+#include "pins.h"
+#include "settings.h"
+#include "speaker.h"
+#include "tof.h"
 
-// Pin map matches the existing CameraBLE bring-up sketch:
-// push-button drives D0 HIGH when pressed (internal pull-down), LED on D8.
-static constexpr int BUTTON_PIN = D0;
-static constexpr int LED_PIN = D8;
-// Unused header pins are pulled down so they can't float and pick up noise,
-// as in the bring-up sketch. D4/D5 are the VL53L1X I2C bus and must NOT be
-// pulled down. The I2S speaker pins come off this list in Phase 7.
-static constexpr int UNUSED_PINS[] = {D1, D2, D3, D6};
 static constexpr uint32_t DEBOUNCE_MS = 40;
-
-// VGA keeps print legible for OCR while staying small enough to send quickly.
-// The phone downscales to 512 px for Gemma anyway.
-static constexpr framesize_t CAPTURE_SIZE = FRAMESIZE_VGA;
-static constexpr int JPEG_QUALITY = 12;  // 0-63, lower = better quality, bigger file
 static constexpr uint32_t INDICATION_ACK_TIMEOUT_MS = 2000;
 // 244 B = one indication per link-layer packet (251 B with Data Length Extension).
 // Full-MTU chunks (512 B) were silently dropped by a phone's Bluetooth stack in
-// testing: no ACK, so the link hung until the 30 s ATT timeout.
+// testing: no ACK, so the link hung until the 30 s ATT timeout. Cause not established.
 static constexpr size_t MAX_CHUNK_BYTES = 244;
-// A VGA JPEG under this is almost certainly a black/blank frame.
-static constexpr size_t SUSPICIOUSLY_SMALL_JPEG = 8000;
-
-// ---- XIAO ESP32S3 Sense onboard camera pin map (from hardware_bringup.ino) ----
-#define PWDN_GPIO_NUM   -1
-#define RESET_GPIO_NUM  -1
-#define XCLK_GPIO_NUM   10
-#define SIOD_GPIO_NUM   40
-#define SIOC_GPIO_NUM   39
-#define Y9_GPIO_NUM     48
-#define Y8_GPIO_NUM     11
-#define Y7_GPIO_NUM     12
-#define Y6_GPIO_NUM     14
-#define Y5_GPIO_NUM     16
-#define Y4_GPIO_NUM     18
-#define Y3_GPIO_NUM     17
-#define Y2_GPIO_NUM     15
-#define VSYNC_GPIO_NUM  38
-#define HREF_GPIO_NUM   47
-#define PCLK_GPIO_NUM   13
 
 static NimBLEServer* server = nullptr;
 static NimBLECharacteristic* controlChar = nullptr;
@@ -64,11 +35,6 @@ static volatile uint16_t connHandle = BLE_HS_CONN_HANDLE_NONE;
 static SemaphoreHandle_t indicationDone = nullptr;
 static volatile int indicationStatus = 0;
 
-static VL53L1X tof;
-static bool cameraOk = false;
-static uint32_t cameraReadyMs = 0;   // millis() when the camera finished init
-static uint32_t frameIndex = 0;      // captures since boot (diagnostics)
-static bool tofOk = false;
 static uint32_t lastPressMs = 0;
 
 static void startAdvertising();
@@ -147,7 +113,6 @@ static void setupBle() {
     resultChar = svc->createCharacteristic(
         RESULT_TEXT_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     resultChar->setCallbacks(new ResultCallbacks());
-    svc->start();
 
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->setName(GLASSES_DEVICE_NAME);
@@ -188,80 +153,12 @@ static void resetLinkAfterStuckTransfer() {
     }
 }
 
-// ======================= Camera + ToF (from hardware_bringup.ino) =======================
-
-static bool initCamera() {
-    camera_config_t config;
-    config.ledc_channel = LEDC_CHANNEL_0;
-    config.ledc_timer   = LEDC_TIMER_0;
-    config.pin_d0 = Y2_GPIO_NUM;  config.pin_d1 = Y3_GPIO_NUM;
-    config.pin_d2 = Y4_GPIO_NUM;  config.pin_d3 = Y5_GPIO_NUM;
-    config.pin_d4 = Y6_GPIO_NUM;  config.pin_d5 = Y7_GPIO_NUM;
-    config.pin_d6 = Y8_GPIO_NUM;  config.pin_d7 = Y9_GPIO_NUM;
-    config.pin_xclk  = XCLK_GPIO_NUM;
-    config.pin_pclk  = PCLK_GPIO_NUM;
-    config.pin_vsync = VSYNC_GPIO_NUM;
-    config.pin_href  = HREF_GPIO_NUM;
-    config.pin_sccb_sda = SIOD_GPIO_NUM;
-    config.pin_sccb_scl = SIOC_GPIO_NUM;
-    config.pin_pwdn  = PWDN_GPIO_NUM;
-    config.pin_reset = RESET_GPIO_NUM;
-    config.xclk_freq_hz = 20000000;
-    config.pixel_format = PIXFORMAT_JPEG;
-    config.frame_size   = CAPTURE_SIZE;
-    config.jpeg_quality = JPEG_QUALITY;
-    config.fb_location  = CAMERA_FB_IN_PSRAM;
-    // Two buffers + GRAB_LATEST: the sensor keeps capturing, so a button press
-    // gets a frame from "now" rather than whenever the last buffer was filled.
-    config.fb_count  = 2;
-    config.grab_mode = CAMERA_GRAB_LATEST;
-
-    esp_err_t err = esp_camera_init(&config);
-    if (err != ESP_OK) {
-        Serial.printf("[CAM] init failed, error 0x%x\n", err);
-        return false;
-    }
-    // Camera is mounted upside down on the glasses (as in the CameraBLE sketch).
-    sensor_t* s = esp_camera_sensor_get();
-    s->set_vflip(s, 1);
-    s->set_hmirror(s, 1);
-    Serial.printf("[CAM] sensor PID 0x%02x (0x26 = OV2640, 0x36 = OV3660)\n", s->id.PID);
-    cameraReadyMs = millis();
-    return true;
-}
-
-static bool initTof() {
-    Wire.begin();  // XIAO default I2C: SDA = D4, SCL = D5
-    Wire.setClock(400000);
-    tof.setTimeout(500);
-    if (!tof.init()) return false;
-    tof.setDistanceMode(VL53L1X::Long);     // up to ~4 m, forward-facing cone
-    tof.setMeasurementTimingBudget(50000);  // 50 ms budget
-    tof.startContinuous(50);                // sample every 50 ms
-    return true;
-}
-
-/** Latest distance in mm, or 0 when there is no valid reading (out of range / sensor fault). */
-static uint16_t readDistanceMm() {
-    if (!tofOk) return 0;
-    uint16_t mm = tof.read();  // waits for the next continuous sample (<= 50 ms)
-    if (tof.timeoutOccurred()) {
-        Serial.println("[TOF] timeout");
-        return 0;
-    }
-    if (tof.ranging_data.range_status != VL53L1X::RangeValid) {
-        Serial.printf("[TOF] no valid reading (%s)\n", VL53L1X::rangeStatusToString(tof.ranging_data.range_status));
-        return 0;
-    }
-    return mm;
-}
-
 // ============================ Capture flow ============================
 
 static bool buttonPressed() {
     static bool lastStable = LOW, lastRead = LOW;
     static uint32_t changedAt = 0;
-    bool r = digitalRead(BUTTON_PIN);
+    bool r = digitalRead(PIN_BUTTON);
     if (r != lastRead) { lastRead = r; changedAt = millis(); }
     if (millis() - changedAt > DEBOUNCE_MS && r != lastStable) {
         lastStable = r;
@@ -272,58 +169,33 @@ static bool buttonPressed() {
 
 static void captureAndSend() {
     lastPressMs = millis();
-    Serial.printf("\n[BTN] button pressed at %lu ms\n", (unsigned long)lastPressMs);
-    digitalWrite(LED_PIN, HIGH);
+    Serial.printf("\n[BTN] tap at %lu ms\n", (unsigned long)lastPressMs);
+    digitalWrite(PIN_LED, LED_ON);
 
     if (!clientConnected || !controlSubscribed || !imageSubscribed) {
         Serial.printf("[BTN] not sent: connected=%d control=%d image=%d\n",
                       clientConnected, controlSubscribed, imageSubscribed);
-        digitalWrite(LED_PIN, LOW);
+        digitalWrite(PIN_LED, LED_OFF);
         return;
     }
-    if (!cameraOk) {
-        Serial.println("[CAM] camera not initialised; nothing to send");
-        digitalWrite(LED_PIN, LOW);
+    camera::Shot shot;
+    if (!camera::capture(shot)) {
+        Serial.println("[CAM] no photo; nothing to send");
+        digitalWrite(PIN_LED, LED_OFF);
         return;
     }
-
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("[CAM] capture failed");
-        digitalWrite(LED_PIN, LOW);
-        return;
-    }
-    frameIndex++;
-    Serial.printf("[DIAG] capture #%lu, %lu ms after camera init, free heap %u, free PSRAM %u\n",
-                  (unsigned long)frameIndex, (unsigned long)(millis() - cameraReadyMs),
-                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
-    // Diagnostic mitigation, NOT a root-cause fix: a black ~3.6 KB frame was seen once
-    // and its cause is unknown. If a frame is suspiciously small, grab one more and keep
-    // the larger, logging both sizes so the next occurrence leaves evidence.
-    if (fb->len < SUSPICIOUSLY_SMALL_JPEG) {
-        size_t firstLen = fb->len;
-        esp_camera_fb_return(fb);
-        fb = esp_camera_fb_get();
-        if (!fb) {
-            Serial.println("[CAM] capture failed on retry");
-            digitalWrite(LED_PIN, LOW);
-            return;
-        }
-        Serial.printf("[DIAG] small frame %u bytes -> retried, new frame %u bytes\n",
-                      (unsigned)firstLen, (unsigned)fb->len);
-    }
-    uint16_t distanceMm = readDistanceMm();
+    // Protocol v1 carries the distance in the header, so it's measured before sending.
+    // (Protocol v2 overlaps it with the image transfer instead.)
+    tof_result_t t = tof::measure(settings::get().tofSamples);
+    uint16_t distanceMm = (t.flags & TOF_FLAG_VALID) ? t.median_mm : 0;
     uint32_t capturedMs = millis();
     Serial.printf("[CAM] frame %ux%u, %u bytes; [TOF] distance %u mm  (capture+ToF %lu ms)\n",
-                  fb->width, fb->height, (unsigned)fb->len, distanceMm,
+                  shot.width, shot.height, (unsigned)shot.len, distanceMm,
                   (unsigned long)(capturedMs - lastPressMs));
-    if (fb->len < SUSPICIOUSLY_SMALL_JPEG) {
-        Serial.println("[CAM] warning: very small JPEG - lens covered, too dark, or camera not ready?");
-    }
 
     // CONTROL header: uint32 jpegSize LE, uint16 distanceMm LE (see glasses_protocol.h)
     uint8_t header[CONTROL_HEADER_LEN];
-    uint32_t size = fb->len;
+    uint32_t size = shot.len;
     memcpy(header, &size, 4);
     memcpy(header + 4, &distanceMm, 2);
     bool ok = indicateAndWait(controlChar, header, sizeof header);
@@ -334,12 +206,11 @@ static void captureAndSend() {
     Serial.printf("[BLE] streaming %lu bytes in %u-byte chunks (MTU %u)\n",
                   (unsigned long)size, (unsigned)chunk, (unsigned)peerMtu);
     size_t sent = 0, packets = 0;
-    while (ok && sent < fb->len) {
-        size_t n = min(chunk, fb->len - sent);
-        ok = indicateAndWait(imageChar, fb->buf + sent, n);
+    while (ok && sent < shot.len) {
+        size_t n = min(chunk, shot.len - sent);
+        ok = indicateAndWait(imageChar, shot.jpeg + sent, n);
         if (ok) { sent += n; packets++; }
     }
-    esp_camera_fb_return(fb);
 
     uint32_t transferMs = millis() - capturedMs;
     if (ok) {
@@ -352,31 +223,37 @@ static void captureAndSend() {
                       (unsigned)sent, (unsigned long)size, (unsigned long)transferMs);
         resetLinkAfterStuckTransfer();
     }
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(PIN_LED, LED_OFF);
+}
+
+static void simulateHold() {
+    Serial.println("[BTN] hold-to-talk arrives in Phase 3 milestone M6");
 }
 
 void setup() {
     Serial.begin(115200);
     delay(1500);  // let USB CDC enumerate so early logs aren't lost
-    Serial.println("\n[SYS] SmartGlasses firmware - capture + transfer");
+    Serial.printf("\n[SYS] SmartGlasses firmware %s\n", FW_VERSION_STR);
     // Brownouts (e.g. speaker current spikes) show up here as reason 9 (ESP_RST_BROWNOUT).
     Serial.printf("[SYS] reset reason %d (1=power-on, 3=software, 4=panic, 9=brownout)\n", (int)esp_reset_reason());
-    pinMode(BUTTON_PIN, INPUT_PULLDOWN);
-    for (int pin : UNUSED_PINS) pinMode(pin, INPUT_PULLDOWN);
-    pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, LOW);
+    settings::load();
 
-    cameraOk = initCamera();
-    Serial.println(cameraOk ? "[CAM] camera OK (VGA JPEG)" : "[CAM] !! camera FAILED - captures disabled");
-    tofOk = initTof();
-    Serial.println(tofOk ? "[TOF] VL53L1X OK" : "[TOF] !! VL53L1X FAILED - check D4/D5 wiring; distance will be omitted");
+    pinMode(PIN_BUTTON, INPUT_PULLDOWN);
+    for (int pin : UNUSED_PULLDOWN_PINS) pinMode(pin, INPUT_PULLDOWN);
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, LED_OFF);
 
+    Serial.println(camera::begin() ? "[CAM] camera OK (VGA JPEG)" : "[CAM] !! camera FAILED - captures disabled");
+    tof::begin();     // logs its own result; captures work without it (no distance)
+    speaker::begin();
+    mic::begin();
     setupBle();
+    console::begin(captureAndSend, simulateHold);
+    if (speaker::ok()) speaker::earcon(speaker::Earcon::Ready);
 }
 
 void loop() {
     if (buttonPressed()) captureAndSend();
-    // Serial 'p' simulates the button for bench testing without hardware wiring.
-    if (Serial.available() && Serial.read() == 'p') captureAndSend();
+    console::poll();
     delay(5);
 }

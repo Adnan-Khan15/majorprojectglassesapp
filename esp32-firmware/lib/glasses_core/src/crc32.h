@@ -1,0 +1,12 @@
+// CRC-32/ISO-HDLC (the zlib / java.util.zip.CRC32 one): check value of "123456789" is 0xCBF43926.
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+/** Pass crc = 0 to start; feed the previous result to continue over several buffers. */
+uint32_t crc32_update(uint32_t crc, const uint8_t* data, size_t len);
+#ifdef __cplusplus
+}
+#endif

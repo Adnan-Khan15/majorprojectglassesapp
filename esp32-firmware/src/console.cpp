@@ -1,0 +1,125 @@
+#include "console.h"
+#include <Arduino.h>
+#include "camera.h"
+#include "glasses_protocol.h"
+#include "mic.h"
+#include "settings.h"
+#include "speaker.h"
+#include "tof.h"
+
+namespace console {
+
+static Action onTap = nullptr, onHold = nullptr;
+static char line[64];
+static size_t len = 0;
+
+void begin(Action tap, Action hold) {
+    onTap = tap;
+    onHold = hold;
+    Serial.println("[CON] serial console ready: type ? and Enter for commands, p = tap");
+}
+
+static void help() {
+    Serial.println(
+        "  p              simulate a button tap\n"
+        "  h              simulate a 2 s hold-to-talk\n"
+        "  caps           status of camera / ToF / speaker / mic, settings\n"
+        "  tone [hz] [ms] speaker test tone (default 1000 500)\n"
+        "  vol [0-100]    volume, % of ceiling\n"
+        "  ceil [1-100]   loudness ceiling, % of full scale (default 50)\n"
+        "  mic [s]        mic level meter (default 3 s)\n"
+        "  tof [n]        n ToF readings (default 10)\n"
+        "  set <key> <v>  hold <ms> | tofn <n> | tofb <ms> | micgain <x10>");
+}
+
+static void caps() {
+    const Settings& s = settings::get();
+    Serial.printf("[CAPS] firmware %s, protocol v%d, reset reason %d\n", FW_VERSION_STR, PROTOCOL_VERSION, (int)esp_reset_reason());
+    Serial.printf("[CAPS] camera %s, ToF %s, speaker %s, mic %s, PSRAM %u free\n",
+                  camera::ok() ? "OK" : "FAILED", tof::ok() ? "VL53L0X OK" : "FAILED",
+                  speaker::ok() ? "OK" : "FAILED", mic::ok() ? "OK" : "FAILED", (unsigned)ESP.getFreePsram());
+    Serial.printf("[CAPS] volume %u%% of ceiling %u%%, hold %u ms, ToF %u samples x %u ms, mic gain %.1fx\n",
+                  s.volume, s.ceilingPct, s.holdMs, s.tofSamples, s.tofBudgetMs, s.micGainX10 / 10.0f);
+}
+
+static void micMeter(int seconds) {
+    if (mic::recording()) { Serial.println("[MIC] busy recording"); return; }
+    Serial.println("[MIC] level meter (dBFS, raw slots before gain). Speak, then stay quiet.");
+    Serial.println("[MIC]   L rms   L peak |  R rms   R peak");
+    for (int i = 0; i < seconds * 4; i++) {
+        mic::Level lv = mic::measure(250);
+        Serial.printf("[MIC] %6.1f  %6.1f  | %6.1f  %6.1f\n", lv.rmsL, lv.peakL, lv.rmsR, lv.peakR);
+    }
+    Serial.println("[MIC] The slot that moves when you speak is the mic. A peak near 0 dBFS means clipping.");
+}
+
+static void tofReadings(int n) {
+    if (!tof::ok()) { Serial.println("[TOF] sensor not initialised"); return; }
+    tof_sample_t s[15];
+    if (n > 15) n = 15;
+    for (int i = 0; i < n; i++) {
+        tof_result_t one = tof::measure(1);
+        s[i].mm = one.median_mm;
+        s[i].status = (one.flags & TOF_FLAG_VALID) ? TOF_RAW_OK : ((one.flags & TOF_FLAG_TIMEOUT) ? TOF_RAW_TIMEOUT : TOF_RAW_OUT_OF_RANGE);
+    }
+    tof_result_t r = tof_reduce(s, n, (n + 1) / 2);
+    Serial.printf("[TOF] over %d readings: median %u mm, %u valid, spread %u mm, flags 0x%02x\n",
+                  n, r.median_mm, r.valid_count, r.spread_mm, r.flags);
+}
+
+static void setKey(const char* key, long v) {
+    Settings& s = settings::get();
+    if (!strcmp(key, "hold") && v >= 200 && v <= 2000) s.holdMs = v;
+    else if (!strcmp(key, "tofn") && v >= 1 && v <= 15) s.tofSamples = v;
+    else if (!strcmp(key, "tofb") && v >= 20 && v <= 500) s.tofBudgetMs = v;  // applied at next boot
+    else if (!strcmp(key, "micgain") && v >= 1 && v <= 160) s.micGainX10 = v;
+    else { Serial.println("[CON] unknown key or value out of range"); return; }
+    settings::save();
+    Serial.printf("[CON] %s = %ld (saved)\n", key, v);
+}
+
+static void run(char* cmd) {
+    char* argv[4] = {};
+    int argc = 0;
+    for (char* t = strtok(cmd, " \t"); t && argc < 4; t = strtok(nullptr, " \t")) argv[argc++] = t;
+    if (!argc) return;
+    const char* c = argv[0];
+    if (!strcmp(c, "?") || !strcmp(c, "list")) help();
+    else if (!strcmp(c, "caps")) caps();
+    else if (!strcmp(c, "tone")) {
+        int hz = argc > 1 ? atoi(argv[1]) : 1000, ms = argc > 2 ? atoi(argv[2]) : 500;
+        Serial.printf("[SPK] tone %d Hz, %d ms at volume %u%% of ceiling %u%%\n", hz, ms,
+                      settings::get().volume, settings::get().ceilingPct);
+        speaker::tone(constrain(hz, 0, 8000), constrain(ms, 1, 5000));
+    } else if (!strcmp(c, "vol")) {
+        if (argc > 1) { settings::get().volume = constrain(atoi(argv[1]), 0, 100); settings::save(); speaker::applyVolume(); }
+        Serial.printf("[SPK] volume %u%% of ceiling\n", settings::get().volume);
+    } else if (!strcmp(c, "ceil")) {
+        if (argc > 1) { settings::get().ceilingPct = constrain(atoi(argv[1]), 1, 100); settings::save(); speaker::applyVolume(); }
+        Serial.printf("[SPK] ceiling %u%% of full scale%s\n", settings::get().ceilingPct,
+                      settings::get().ceilingPct > 50 ? "  (above 50%: check the speaker isn't distorting or the board resetting)" : "");
+    } else if (!strcmp(c, "mic")) micMeter(argc > 1 ? constrain(atoi(argv[1]), 1, 30) : 3);
+    else if (!strcmp(c, "tof")) tofReadings(argc > 1 ? constrain(atoi(argv[1]), 1, 15) : 10);
+    else if (!strcmp(c, "set") && argc == 3) setKey(argv[1], atol(argv[2]));
+    else Serial.printf("[CON] unknown command \"%s\" (type ? for help)\n", c);
+}
+
+void poll() {
+    while (Serial.available()) {
+        char ch = (char)Serial.read();
+        if (len == 0 && (ch == 'p' || ch == 'h')) {  // instant keys, as in v0.3
+            if (ch == 'p' && onTap) onTap();
+            if (ch == 'h' && onHold) onHold();
+            continue;
+        }
+        if (ch == '\r' || ch == '\n') {
+            line[len] = 0;
+            if (len) run(line);
+            len = 0;
+        } else if (len < sizeof(line) - 1) {
+            line[len++] = ch;
+        }
+    }
+}
+
+}  // namespace console
