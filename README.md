@@ -106,21 +106,29 @@ On a recent flagship phone's GPU, Google's benchmark for this model is about 0.3
 **Requirements:**
 - an Android phone running **Android 12 or newer**, with Bluetooth
 - **8 GB of RAM or more** recommended
-- about **3 GB of free storage** for the AI model, plus the model file itself while you import it
+- about **5.5 GB of free storage** while importing the model (the download + the app's copy); about **2.7 GB** once you delete the download
 
 The app and the AI model are installed **separately**. The APK is about 50 MB; the model (`gemma-4-E2B-it.litertlm`, 2.59 GB) is a file you put on the phone once.
 
 ### 1. Install the app
-1. From the [latest release](../../releases/latest), download **`SmartGlasses-offline.apk`**. This build has **no internet permission at all**; everything runs on the phone.
-   - `SmartGlasses-withDownload.apk` is the same app plus an optional "Download" button for the model (it adds the internet permission only for that).
+1. From the **[v0.4.0-test pre-release](https://github.com/Adnan-Khan15/majorprojectglassesapp/releases/tag/v0.4.0-test)**, download **`SmartGlasses-v0.4-test.apk`** (107 MB). This build has **no internet permission at all**; everything runs on the phone. If the old v0.3 app is installed, uninstall it first (frees ~5 GB).
 2. Open the APK on the phone. Android will warn about installing from an unknown source: tap **Settings**, turn on **Allow from this source**, go back, and tap **Install**. If Play Protect says "unrecognised app", tap **More details → Install anyway**.
 3. Open **Glasses** and allow **Nearby devices** (Bluetooth) when asked. The app never uses your location.
 
 ### 2. Install the AI model
-1. Download **`gemma-4-E2B-it.litertlm`** to the phone, for example from the Google Drive link you were given (in Drive: **⋮ → Download**), or from [Hugging Face](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/blob/main/gemma-4-E2B-it.litertlm). It ends up in **Downloads**.
-2. In the app, on the **AI model** card, tap **Import from file** and pick the file.
-3. The app copies it into its own storage and checks it (SHA-256). This takes a minute or two. When it says **Model installed and verified ✓**, it loads Gemma; wait for **Gemma 4 E2B ready on GPU**.
-4. You can now delete the copy in Downloads to get the space back.
+
+**Download link (open it on the phone):**
+**[⬇ gemma-4-E2B-it.litertlm](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm)** (2.59 GB, Google's Gemma 4 E2B, Apache 2.0, from Hugging Face; no account needed). Use Wi-Fi.
+
+**Where does the file go?** Nowhere special: leave it wherever the browser saves it (normally **Downloads**). You don't move or rename it. The app takes it from there:
+
+1. Open the app. On the **AI model** card, tap **Import from file**.
+2. In the file picker that opens, go to **Downloads** and tap **`gemma-4-E2B-it.litertlm`**.
+3. The app **copies** it into its own private storage and checks it (exact size 2,588,147,712 bytes + SHA-256). This takes a minute or two, with a progress bar. A wrong or incomplete file is rejected with a message.
+4. When it says **Model installed and verified ✓**, the app loads Gemma; wait for **Gemma 4 E2B ready on GPU**.
+5. **Delete the copy in Downloads** to get 2.6 GB back. The app keeps its own copy (shown on the card as "Storage used by the model").
+
+You only do this once. Installing a newer APK over the app keeps the model; uninstalling the app deletes it.
 
 Until the model is installed, the app still works: photos are described with the basic ML Kit labeller instead.
 
@@ -141,7 +149,7 @@ You need a **Seeed Studio XIAO ESP32S3 Sense** and a USB-C cable that carries da
 
 ### Option A: prebuilt image (no tools to install)
 
-1. Download **`smartglasses-firmware-v0.3.1-merged.bin`** from the [Releases page](../../releases/latest).
+1. Download **`smartglasses-firmware-v0.4.0-merged.bin`** from the [v0.4.0-test pre-release](https://github.com/Adnan-Khan15/majorprojectglassesapp/releases/tag/v0.4.0-test). It needs the Phase 3 wiring below, and the v0.4 app.
 2. In Chrome or Edge on a computer, open **https://espressif.github.io/esptool-js/**.
 3. Plug in the board. If it isn't detected, hold the **B (BOOT)** button while plugging it in.
 4. Click **Connect** and choose the board's serial port.
