@@ -65,6 +65,8 @@ Both sides use the same definitions: [`glasses_protocol.h`](esp32-firmware/inclu
 
 ## Project status
 
+> **Phase 3 is in progress on the `phase3` branch.** For what has been built, what is verified, and what comes next, see **[docs/PROGRESS.md](docs/PROGRESS.md)**; it is more up to date than the table below.
+
 | Phase | What | Status |
 |---|---|---|
 | 1 | BLE link: board advertises, phone connects, button sends a test string, phone echoes it back | ✅ Code complete; on-hardware test pending |

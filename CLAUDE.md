@@ -6,7 +6,7 @@ Smart assistive glasses (BE major project). A Seeed XIAO ESP32S3 Sense on the gl
 - `android-app/`: Kotlin, Jetpack Compose, Nordic BLE library, minSdk 31, arm64 only.
 - `esp32-firmware/`: PlatformIO, Arduino-ESP32 core **2.0.17** (ESP-IDF 4.4, legacy `driver/i2s.h`), NimBLE-Arduino 2.x.
 - `scripts/`: model fetch helper, latency report, ADPCM golden-vector generator (`gen_adpcm_vectors.py` writes the vectors both the C and Kotlin tests use). Python tests: `python3 -m unittest discover -s scripts/tests`.
-- `docs/`: `PHASE3_PLAN.md` (current plan and milestone status), hardware test protocols.
+- `docs/`: **`PROGRESS.md` (start here: full handoff, what's built/verified/next)**, `PHASE3_PLAN.md` (plan + milestone status), hardware test protocols.
 
 ## Build and test
 ```bash
