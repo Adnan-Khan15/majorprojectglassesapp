@@ -115,3 +115,15 @@ Setup wizard, Home (status chips, Describe, Ask with phone mic, result card with
 2. Keep the status LED on GPIO21? Default: keep it (active-LOW).
 3. Target phone model and Android version: needed for the STT and GPU decisions in M5.
 4. Should `offline` be the default release flavor? Default: yes.
+
+---
+
+## 5. Milestone status
+
+| Milestone | Commit | Status |
+|---|---|---|
+| M0 Baseline + instrumentation | `0cf8379` | Host-tested parts done (latency log, report script). Firmware diagnostics: implemented, awaiting hardware verification (HARDWARE_TESTS 0.x) |
+| M1 Model delivery | `89edeb4` | Done (host-tested: ModelStore state machine, APK permissions checked with aapt2). Import on a phone: awaiting verification |
+| M2 Firmware bring-up | `579cd36` | Implemented, awaiting hardware verification (HARDWARE_TESTS 2.x, TOF_TEST_PROTOCOL) |
+| M3 Protocol v2 + throughput spike | `f9e2f88` | Implemented, awaiting hardware verification (HARDWARE_TESTS 3.x). **The 3.5–3.8 throughput numbers gate M4/M6** |
+| M4–M8 | | Not started |
