@@ -11,10 +11,11 @@ Smart assistive glasses (BE major project). A Seeed XIAO ESP32S3 Sense on the gl
 ## Build and test
 ```bash
 # Android (JDK 17)
-cd android-app && ./gradlew testOfflineDebugUnitTest assembleOfflineRelease   # flavors: offline (no network), withDownload
+cd android-app && ./gradlew testOfflineDebugUnitTest assembleOfflineDebug   # flavors: offline (no network), withDownload
+scripts/check-apk-permissions.sh   # the offline APKs must have no network permission
 # Firmware (needs `pip install platformio`)
 cd esp32-firmware && pio run            # build for the board
-cd esp32-firmware && pio test -e native # host tests of lib/glasses_core (ADPCM, CRC32, ToF filter)
+cd esp32-firmware && pio test -e native # host tests of lib/glasses_core (ADPCM, CRC32, ToF filter, frames)
 ```
 
 ## Rules for working in this repo
@@ -34,3 +35,9 @@ cd esp32-firmware && pio test -e native # host tests of lib/glasses_core (ADPCM,
 | Mic (onboard PDM, I2S0 RX) | CLK GPIO42, DATA GPIO41 |
 | ToF (VL53L0X, I2C) | SDA GPIO9 (D10), SCL GPIO7 (D8) |
 | Camera | onboard, pin map in `esp32-firmware/reference/hardware_bringup.ino` |
+
+## Where things live (Phase 3)
+- Spoken text is built ONLY in `ai/AnswerComposer` (distance + safety rules; unit-tested). Never let model output reach speech unfiltered.
+- One pipeline: `assistant/AssistantSession` (tap, glasses question, phone-mic question). Speech goes out through `speech/SpeechOutput`.
+- Audio on the link: 16 kHz IMA ADPCM, 400-sample frames, encoder state in each 8-byte header; downlink paced by EVT_CREDITS.
+- Settings: `settings/AppSettings` (phone) and `src/settings.cpp` (NVS on the board); the phone pushes its values once per connection (`GlassesApp` `onFirstCaps`).

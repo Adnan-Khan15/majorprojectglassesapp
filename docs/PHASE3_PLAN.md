@@ -122,8 +122,15 @@ Setup wizard, Home (status chips, Describe, Ask with phone mic, result card with
 
 | Milestone | Commit | Status |
 |---|---|---|
-| M0 Baseline + instrumentation | `0cf8379` | Host-tested parts done (latency log, report script). Firmware diagnostics: implemented, awaiting hardware verification (HARDWARE_TESTS 0.x) |
-| M1 Model delivery | `89edeb4` | Done (host-tested: ModelStore state machine, APK permissions checked with aapt2). Import on a phone: awaiting verification |
-| M2 Firmware bring-up | `579cd36` | Implemented, awaiting hardware verification (HARDWARE_TESTS 2.x, TOF_TEST_PROTOCOL) |
-| M3 Protocol v2 + throughput spike | `f9e2f88` | Implemented, awaiting hardware verification (HARDWARE_TESTS 3.x). **The 3.5–3.8 throughput numbers gate M4/M6** |
-| M4–M8 | | Not started |
+| M0 Baseline + instrumentation | `0cf8379` | Host-tested; firmware diagnostics awaiting hardware (0.x) |
+| M1 Model delivery | `89edeb4` | Done (host-tested + APK permission check); import verified by the tester on v0.4.0-test |
+| M2 Firmware bring-up | `579cd36` | Partly verified on v0.4.0-test (ToF, camera, speaker present); serial-console tests 2.x pending |
+| M3 Protocol v2 + throughput | `f9e2f88` | Verified on v0.4.0-test: handshake, tap with ToF, throughput (1 run each) |
+| M3.1 Fast photos / warm-up / volume | `4f895d5` | Implemented, awaiting hardware verification (3.1.x) |
+| M4 Speaker path | `28752e2` | Implemented, awaiting hardware verification (4.x) |
+| M5 Voice pipeline (phone) | `5038899` | Implemented, awaiting hardware verification (5.x); STT spike to run |
+| M6 Hold-to-talk | `3d69a3d` | Implemented, awaiting hardware verification (6.x) |
+| M7 App UI | `041df03` | Implemented, awaiting device verification (7.x) |
+| M8 Release hygiene | (M8 commit) | Done: permission check passes on the offline APKs; v0.6.0-test |
+
+Full detail and next steps: [PROGRESS.md](PROGRESS.md).
