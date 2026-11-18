@@ -136,10 +136,7 @@ class CapturePipelineTest {
     }
 
     @Test
-    fun sentenceIncludesTheRealDistance() {
-        assertEquals("a blue pen with Pentel written on it, 36 centimetres",
-            SceneDescriber.compose("a blue pen with Pentel written on it", 362))
-        assertEquals("a white mug", SceneDescriber.compose("a white mug", null))
+    fun modelReplyIsCleaned() {
         assertEquals("two blue Pentel Superball pens on a grid",
             SceneDescriber.cleanPhrase("Two blue Pentel Superball pens on a grid."))
     }

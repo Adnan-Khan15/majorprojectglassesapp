@@ -12,6 +12,7 @@ import com.smartglasses.app.settings.AppSettings
 import com.smartglasses.app.speech.GlassesSpeaker
 import com.smartglasses.app.speech.SpeechOutput
 import com.smartglasses.app.speech.TtsEngine
+import com.smartglasses.app.voice.AndroidOnDeviceStt
 import com.smartglasses.app.metrics.LatencyLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +40,8 @@ class GlassesApp : Application() {
     val speech by lazy { SpeechOutput(tts, GlassesSpeaker(link), link, settings) }
 
     val latencyLog by lazy { LatencyLog(filesDir) }
-    val session by lazy { AssistantSession(appScope, link, describer, speech, latencyLog) }
+    val androidStt by lazy { AndroidOnDeviceStt(this) }
+    val session by lazy { AssistantSession(appScope, link, describer, speech, latencyLog, settings, androidStt) }
 
     override fun onCreate() {
         super.onCreate()

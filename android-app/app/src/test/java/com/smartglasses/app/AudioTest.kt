@@ -7,6 +7,7 @@ import com.smartglasses.app.audio.Resampler
 import com.smartglasses.app.audio.SpeechFramer
 import com.smartglasses.app.audio.Wav
 import com.smartglasses.app.ble.Frames
+import com.smartglasses.app.voice.AudioCheck
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -99,5 +100,13 @@ class AudioTest {
         assertTrue(wrap.canSend(65535))
         assertTrue(wrap.canSend(5))
         assertFalse(wrap.canSend(10))
+    }
+
+    @Test
+    fun speechDetection() {
+        assertFalse(AudioCheck.isSpeechLikely(ShortArray(16000)))                        // 1 s of silence
+        assertFalse(AudioCheck.isSpeechLikely(tone(300.0, 16000, 3000)))                 // loud but only 0.19 s
+        assertTrue(AudioCheck.isSpeechLikely(ShortArray(32000) + tone(300.0, 16000, 8000, 3000.0)))  // quiet start, then voice
+        assertEquals(-96f, AudioCheck.dbfs(ShortArray(10)), 0.01f)
     }
 }

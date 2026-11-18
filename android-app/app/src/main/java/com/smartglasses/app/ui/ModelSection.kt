@@ -86,6 +86,8 @@ fun ModelSection(vm: AssistantViewModel = viewModel()) {
 
         ModelSetupCard()
 
+        PhoneMicButton(enabled = model is ModelState.Ready)
+
         Button(
             onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             enabled = ready && !busy,
@@ -113,29 +115,25 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
                 Modifier.fillMaxWidth(),
             )
         }
+        is AssistantRun.Listening -> Text("Listening… (release to ask)", color = StatusColors.busy)
         is AssistantRun.Describing -> ResultRow(run.preview) {
             SourceLabel(run.source, null)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
-                Text("Looking at the photo…")
+                Text(if (run.question) "Thinking about your question…" else "Looking at the photo…")
             }
         }
         is AssistantRun.Done -> ResultRow(run.preview) {
             SourceLabel(run.source, run.tof)
+            run.question?.let { Text("Heard: \u201c$it\u201d", style = MaterialTheme.typography.bodyMedium) }
             Text("\u201c${run.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
             Text(timingLine(run.timing), style = MaterialTheme.typography.bodySmall)
             Text(
-                "${run.result.engine} · spoken on ${run.announcer}" + (run.speechError?.let { " · $it" } ?: ""),
+                "${run.engine} · spoken on ${run.spokenOn}" + (run.speechError?.let { " · $it" } ?: ""),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            run.speechError?.let { Text("Couldn't speak it: $it", color = StatusColors.bad, style = MaterialTheme.typography.bodySmall) }
-            when (run.sentToGlasses) {
-                true -> Text("Sent to glasses ✓", color = StatusColors.ok, style = MaterialTheme.typography.bodySmall)
-                false -> Text("Couldn't send the sentence to the glasses", color = StatusColors.bad, style = MaterialTheme.typography.bodySmall)
-                null -> Unit
-            }
-            if (run.result.ocrText.isNotBlank()) Text("Text read: ${run.result.ocrText.take(80)}",
+            if (run.ocrText.isNotBlank()) Text("Text read: ${run.ocrText.take(80)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         is AssistantRun.Error -> ResultRow(run.preview) {
@@ -147,15 +145,16 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SourceLabel(source: Source, tof: TofReading?) {
+private fun SourceLabel(source: Source?, tof: TofReading?) {
     val text = when (source) {
         Source.GLASSES -> "From glasses · " + when {
             tof == null -> "distance pending"
-            tof.isValid -> SceneDescriber.formatDistance(tof.medianMm) + " (${tof.validCount}/${tof.sampleCount} samples, ±${tof.spreadMm / 2} mm)"
+            tof.isValid -> "${tof.medianMm} mm (${tof.validCount}/${tof.sampleCount} samples, spread ${tof.spreadMm} mm)"
             tof.noSensor -> "no distance sensor"
             else -> "no reliable distance"
         }
         Source.GALLERY -> "From gallery (no distance sensor)"
+        null -> return
     }
     Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
 }

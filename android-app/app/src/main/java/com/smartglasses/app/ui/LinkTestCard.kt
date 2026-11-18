@@ -132,6 +132,7 @@ fun LinkTestCard() {
             }) { Text("Speak test sentence") }
             OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_CAPTURE, Frames.MODE_PHONE)) } }) { Text("Capture") }
         }
+        SttSpikeSection()
         results.take(6).forEach { Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
     }
 }

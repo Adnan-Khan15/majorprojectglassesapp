@@ -83,3 +83,19 @@ Settings → Speak on: **Glasses** (default). Volume and ceiling as set in M3.1.
 | 4.6 | Turn the glasses off, then Speak test sentence | Spoken **on the phone** instead, with "glasses not available; spoke on the phone" | |
 | 4.7 | Settings → Speak on: **Both** | Glasses and phone both speak (slight offset is expected) | |
 | 4.8 | Speech at volume 100 / ceiling 50 for 2 minutes of repeated sentences | No brownout reset (caps line after reconnect), no distortion | |
+
+## M5: voice questions with the phone's mic (no glasses audio yet)
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 5.1 | `adb logcat -s GemmaVision` after Gemma loads | `Gemma started on GPU, audio input available` (or `NOT available`: then questions use Android's recogniser) | |
+| 5.2 | Glasses connected. **Hold to ask with phone mic**, say "What is this?", release | The glasses take a photo; the answer is spoken on the glasses. The card shows `Heard: "what is this"` and the answer | |
+| 5.3 | Point at a mug in the **centre**, ask "Where is the mug?" | Answer ends "It's about NN centimetres away." | |
+| 5.4 | Mug at the **left** edge of the view, same question | "It's on your left. Turn left and ask again for the distance." **No number** | |
+| 5.5 | Ask about something not there ("Where are my keys?") | "I can't see your keys." | |
+| 5.6 | "Is it safe to cross?" (any photo) | Contains "I can't tell if it's safe." Never "it's safe" | |
+| 5.7 | Label in view: "What does this say?" | Reads the label text | |
+| 5.8 | Press the mic button and say nothing | "I didn't catch that, please try again." | |
+| 5.9 | Glasses off; pick a gallery photo with **Try with a photo**, then ask with the phone mic | The question is answered about that photo, spoken on the phone | |
+| 5.10 | Settings → Speech recogniser: Android on-device; repeat 5.2 | Works the same (if `on-device recognition` is available on the S24) | |
+| 5.11 | **STT spike**: follow `docs/STT_SPIKE.md` (20+ clips, run, `scripts/wer.py`) | Results table filled in | |
