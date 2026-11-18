@@ -48,7 +48,7 @@ Flash the new firmware **and** install the new app together: v2 firmware sends a
 | 3.6 | **Downlink 100 KB**, 3 runs | `downlink (write without response): X KB/s, … missing (Y %)` |1 run so far: 100 000 B, 424 frames, **0 missing**, 2013 ms = **48.5 KB/s** (board measured) |
 | 3.7 | Tick **Request 2M PHY**, repeat 3.5 and 3.6 | Serial shows `PHY now tx 2 rx 2` if accepted; record KB/s again | |
 | 3.8 | **Decision:** ADPCM 16 kHz needs ~9.6 KB/s including headers (raw PCM: ~32 KB/s). If both directions sustain ≥ 15 KB/s with < 1 % loss, live ADPCM audio is fine. If not, report the numbers before M4/M6 build on it | |Provisional: both directions far above 15 KB/s with 0 loss in 1 run each, so live ADPCM is fine. Needs 3 runs each + phone model to confirm |
-| 3.9 | **Test tone / Read ToF / Capture** buttons | Beep from the glasses / a `ToF for image 65535` line in the log / a photo described and spoken |Read ToF works: 0/5 (out of range) ×2, then 34 mm (5/5, spread 2) and 52 mm (5/5, spread 1). Test tone / Capture: no confirmation yet (commands aren't logged) |
+| 3.9 | **Test tone / Read ToF / Capture** buttons | Beep from the glasses / a `ToF for image 65535` line in the log / a photo described and spoken |Read ToF works: 0/5 (out of range) ×2, then 34 mm (5/5, spread 2) and 52 mm (5/5, spread 1). Test tone: audible but VERY QUIET (volume 60 % of 50 % ceiling = 30 % full scale). Capture: worked (photo 1) |
 | 3.10 | **Resend.** (Can't be forced from the app.) If the log ever shows `checksum mismatch` → `asking the glasses to resend photo N`, check the photo still gets described | | |
 
 Record the phone model and Android version with every throughput result.

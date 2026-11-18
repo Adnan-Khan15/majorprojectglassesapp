@@ -212,6 +212,10 @@ Button tap (fires on press, as in v0.3)
 | Image complete → sentence sent | 8.2 s (1st capture after connect), 3.3 s (2nd) |
 | Live ToF | 34 mm and 52 mm (5/5 valid, spread ≤ 2 mm); far/dark targets: 0/5 valid, correctly no distance spoken |
 
+Phone: **Samsung Galaxy S24, Android 17**. The board was switched off on purpose after the throughput tests (that explains the 02:35 disconnect).
+
+**Speaker:** the app's Test tone (1 kHz, 500 ms) was audible but **very quiet**. It plays at volume 60 % × ceiling 50 % = 30 % of full scale (about −10 dBFS). Amp supply voltage and GAIN/SD wiring are still unknown.
+
 **Conclusions (1 run each; confirm with 3):**
 1. Live IMA ADPCM audio (~9.6 KB/s) fits both directions with 5–7× headroom, so M4/M6 go ahead as designed.
 2. **Photos are the slow path**: indications move 5.3 KB/s while notifications move 66.8 KB/s on the same link. Sending photo chunks as sequence-numbered notifications (CRC + resend already exist) is expected to cut ~2 s from every tap. That's an estimate until measured. Proposed as milestone **M3.1** before M4.
@@ -252,7 +256,7 @@ Run [`HARDWARE_TESTS.md`](HARDWARE_TESTS.md) sections **M0, M2 and M3** with v0.
 ### 6.2 Open questions for the user (section 10 of the prompt)
 1. How are the MAX98357A **SD** and **GAIN** pins wired? (Sets how loud we can go; mono already handled.)
 2. Keep the status LED on GPIO21? (Default: yes.)
-3. **Target phone model and Android version?** (Needed for the speech-recognition and GPU decisions in M5.)
+3. ~~Target phone~~ **Answered: Samsung Galaxy S24, Android 17** (the tester's phone, used for all results so far).
 4. Should the `offline` flavor be the default release? (Default: yes.)
 
 ### 6.3 M4: Speaker path (next milestone)
