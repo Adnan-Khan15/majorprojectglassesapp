@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 #include <math.h>
+#include "ble_link.h"
+#include "glasses_frames.h"
+#include "ima_adpcm.h"
 #include "pins.h"
 #include "settings.h"
 
@@ -10,20 +13,34 @@ namespace speaker {
 static constexpr i2s_port_t PORT = I2S_NUM_1;  // I2S0 is reserved for the PDM mic
 static constexpr int DMA_BUF_LEN = 256;        // samples per DMA buffer
 static constexpr int DMA_BUF_COUNT = 6;        // ~96 ms of buffering
-static constexpr int BLOCK = 128;              // samples generated per write
+static constexpr int BLOCK = 128;              // samples written per i2s_write
 static constexpr uint32_t DRAIN_MS = (DMA_BUF_LEN * DMA_BUF_COUNT * 1000) / SAMPLE_RATE + 10;
 static constexpr int EDGE_SAMPLES = 80;        // 5 ms fade in/out on every tone: no clicks
+static constexpr int STREAM_FADE_SAMPLES = 160;  // 10 ms fade-in at the start of speech
+static constexpr uint32_t RING_SAMPLES = (uint32_t)RING_FRAMES * FRAME_SAMPLES;
+static constexpr uint16_t CREDIT_EVERY_FRAMES = 8;
 
 struct ToneCmd { uint16_t hz; uint16_t ms; uint32_t gen; };
 
 static bool isOk = false;
 static QueueHandle_t toneQ = nullptr;
 static TaskHandle_t task = nullptr;
-static volatile bool active = false;           // generating samples right now
-static volatile uint32_t drainUntil = 0;       // millis() until DMA is empty
+static volatile bool toneActive = false;
+static volatile uint32_t drainUntil = 0;
 // stop() bumps the generation; queued/playing items from an older generation are dropped.
 static volatile uint32_t generation = 0;
-static volatile int32_t gainQ15 = 0;           // 0..32767 applied to full-scale samples
+static volatile int32_t gainQ15 = 0;
+
+// ---- speech stream: single producer (BLE task) / single consumer (audio task) ring ----
+static int16_t* ring = nullptr;                 // PSRAM
+static volatile uint32_t writeTotal = 0;        // samples ever written in this stream
+static volatile uint32_t readTotal = 0;         // samples ever played in this stream
+static volatile bool streamActive = false;      // START seen, not finished
+static volatile bool streamEnded = false;       // END seen
+static volatile bool streamNew = false;         // tells the audio task to send initial credits
+static volatile uint16_t nextSeq = 0;
+static volatile uint16_t lostFrames = 0, overflowFrames = 0;
+static portMUX_TYPE ringMux = portMUX_INITIALIZER_UNLOCKED;
 
 void applyVolume() {
     const Settings& s = settings::get();
@@ -57,17 +74,99 @@ static void playTone(const ToneCmd& t) {
     }
 }
 
+static void sendCredits(uint32_t framesPlayed) {
+    uint8_t p[3];
+    p[0] = STREAM_SPEECH;
+    put_u16(p + 1, (uint16_t)(framesPlayed + RING_FRAMES));  // seq numbers start at 0 per stream
+    ble::sendEvent(EVT_CREDITS, p, 3);
+}
+
+static void sendPlayDone(uint8_t reason, uint16_t underruns) {
+    uint8_t p[4];
+    p[0] = STREAM_SPEECH;
+    p[1] = reason;
+    put_u16(p + 2, underruns);
+    ble::sendEvent(EVT_PLAY_DONE, p, 4);
+}
+
+/** Plays the current speech stream to the end (or until stopped). Runs on the audio task. */
+static void playStream() {
+    const uint32_t gen = generation;
+    bool playing = false;
+    uint16_t underruns = 0;
+    uint32_t lastUnderrunEvt = 0, creditedFrames = 0, fade = 0;
+    int16_t buf[BLOCK];
+    uint32_t startMs = millis();
+    while (gen == generation) {
+        if (streamNew) { streamNew = false; sendCredits(0); creditedFrames = 0; }
+        uint32_t avail = writeTotal - readTotal;
+        if (!playing) {
+            if (avail >= (uint32_t)PREBUFFER_FRAMES * FRAME_SAMPLES || (streamEnded && avail > 0)) {
+                playing = true;
+                fade = 0;
+                uint8_t p = STREAM_SPEECH;
+                ble::sendEvent(EVT_PLAY_STARTED, &p, 1);
+                Serial.printf("[SPK] speech playback started after %lu ms of buffering (%lu samples)\n",
+                              (unsigned long)(millis() - startMs), (unsigned long)avail);
+            } else if (streamEnded) {
+                break;  // empty stream
+            } else if (millis() - startMs > 5000) {
+                Serial.println("[SPK] speech stream stalled before playback; giving up");
+                break;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(5));
+                continue;
+            }
+        }
+        if (avail == 0) {
+            if (streamEnded) break;  // finished normally
+            // Underrun: keep the I2S clock fed with silence until more speech arrives.
+            memset(buf, 0, sizeof buf);
+            writeStereo(buf, BLOCK);
+            underruns++;
+            if (millis() - lastUnderrunEvt > 500) {
+                lastUnderrunEvt = millis();
+                uint8_t p[3]; p[0] = STREAM_SPEECH; put_u16(p + 1, underruns);
+                ble::sendEvent(EVT_UNDERRUN, p, 3);
+            }
+            continue;
+        }
+        int n = (int)min<uint32_t>(avail, BLOCK);
+        uint32_t r = readTotal;
+        for (int i = 0; i < n; i++) {
+            int32_t v = (int32_t)ring[(r + i) % RING_SAMPLES] * gainQ15 >> 15;
+            if (fade < STREAM_FADE_SAMPLES) { v = v * (int32_t)fade / STREAM_FADE_SAMPLES; fade++; }
+            buf[i] = (int16_t)v;
+        }
+        writeStereo(buf, n);
+        readTotal = r + n;
+        uint32_t framesPlayed = readTotal / FRAME_SAMPLES;
+        if (framesPlayed - creditedFrames >= CREDIT_EVERY_FRAMES) { creditedFrames = framesPlayed; sendCredits(framesPlayed); }
+    }
+    bool stopped = gen != generation;
+    // If stopped, stop() already cleared streamActive, and a NEW stream may have set it again.
+    if (!stopped) streamActive = false;
+    drainUntil = millis() + DRAIN_MS;
+    sendPlayDone(stopped ? 1 : 0, underruns);
+    Serial.printf("[SPK] speech %s: %lu samples (%.1f s), %u underruns, %u lost frames, %u overflow frames\n",
+                  stopped ? "STOPPED" : "finished", (unsigned long)readTotal, readTotal / (float)SAMPLE_RATE,
+                  underruns, lostFrames, overflowFrames);
+}
+
 static void audioTask(void*) {
     ToneCmd t;
     for (;;) {
-        if (xQueueReceive(toneQ, &t, portMAX_DELAY) == pdTRUE) {
-            active = true;
+        // Tones first (earcons are short); then speech.
+        if (xQueueReceive(toneQ, &t, pdMS_TO_TICKS(streamActive ? 0 : 20)) == pdTRUE) {
+            toneActive = true;
             if (t.gen == generation) playTone(t);
             if (uxQueueMessagesWaiting(toneQ) == 0) {
-                active = false;
+                toneActive = false;
                 drainUntil = millis() + DRAIN_MS;
             }
+            continue;
         }
+        if (streamActive) playStream();
     }
 }
 
@@ -100,12 +199,14 @@ bool begin() {
         return isOk = false;
     }
     i2s_zero_dma_buffer(PORT);
+    ring = (int16_t*)ps_malloc(RING_SAMPLES * sizeof(int16_t));
+    if (!ring) Serial.println("[SPK] !! no PSRAM for the speech buffer; only tones will play");
     applyVolume();
     toneQ = xQueueCreate(16, sizeof(ToneCmd));
-    xTaskCreatePinnedToCore(audioTask, "spk", 6144, nullptr, 5, &task, 1);
-    Serial.printf("[SPK] I2S1 TX ready: BCLK %d, LRC %d, DOUT %d, %lu Hz; ceiling %u%%, volume %u%%\n",
+    xTaskCreatePinnedToCore(audioTask, "spk", 8192, nullptr, 5, &task, 1);
+    Serial.printf("[SPK] I2S1 TX ready: BCLK %d, LRC %d, DOUT %d, %lu Hz; ceiling %u%%, volume %u%%; speech buffer %u ms\n",
                   PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DOUT, (unsigned long)SAMPLE_RATE,
-                  settings::get().ceilingPct, settings::get().volume);
+                  settings::get().ceilingPct, settings::get().volume, (unsigned)(RING_SAMPLES * 1000 / SAMPLE_RATE));
     return isOk = true;
 }
 
@@ -114,20 +215,24 @@ bool ok() { return isOk; }
 void tone(uint16_t hz, uint16_t ms) {
     if (!isOk) return;
     ToneCmd t{hz, ms, generation};
-    active = true;  // set before the task picks it up, so busy() is true immediately
+    toneActive = true;  // set before the task picks it up, so busy() is true immediately
     xQueueSend(toneQ, &t, 0);
 }
 
 void earcon(Earcon e) {
     switch (e) {
-        case Earcon::Listening: tone(660, 60); tone(990, 90); break;           // rising: "speak now"
+        case Earcon::Listening: tone(660, 60); tone(990, 90); break;  // rising: "speak now"
         case Earcon::Thinking:  tone(520, 70); tone(0, 60); tone(520, 70); break;
         case Earcon::Error:     tone(330, 250); break;
         case Earcon::Ready:     tone(880, 80); break;
     }
 }
 
-bool busy() { return active || uxQueueMessagesWaiting(toneQ) > 0 || (int32_t)(millis() - drainUntil) < 0; }
+bool speaking() { return streamActive; }
+
+bool busy() {
+    return toneActive || streamActive || uxQueueMessagesWaiting(toneQ) > 0 || (int32_t)(millis() - drainUntil) < 0;
+}
 
 void waitIdle(uint32_t timeoutMs) {
     uint32_t t0 = millis();
@@ -137,8 +242,43 @@ void waitIdle(uint32_t timeoutMs) {
 void stop() {
     if (!isOk) return;
     generation = generation + 1;
+    streamActive = false;
     xQueueReset(toneQ);
     i2s_zero_dma_buffer(PORT);
+}
+
+void onSpeechFrame(const uint8_t* d, size_t len) {
+    if (!ring || !isOk) return;
+    audio_header_t h;
+    if (audio_header_unpack(d, len, &h) != 0 || h.codec != AUDIO_CODEC_ADPCM) return;
+    if (h.flags & AUDIO_FLAG_START) {
+        if (streamActive) stop();  // a new answer replaces one still playing
+        portENTER_CRITICAL(&ringMux);
+        writeTotal = 0; readTotal = 0;
+        streamEnded = false;
+        nextSeq = h.seq;
+        lostFrames = 0; overflowFrames = 0;
+        streamNew = true;
+        streamActive = true;
+        portEXIT_CRITICAL(&ringMux);
+    }
+    if (!streamActive) return;  // frames of a stream that was stopped
+    if (h.seq != nextSeq) lostFrames += (uint16_t)(h.seq - nextSeq);  // skip the gap: shorter, not corrupt
+    nextSeq = h.seq + 1;
+    size_t dataLen = len - AUDIO_HDR_LEN;
+    uint32_t samples = (uint32_t)dataLen * 2;
+    if (writeTotal + samples - readTotal > RING_SAMPLES) {
+        overflowFrames++;  // the phone sent beyond its credits
+    } else {
+        int16_t pcm[FRAME_SAMPLES * 2];
+        if (samples > sizeof pcm / sizeof pcm[0]) samples = sizeof pcm / sizeof pcm[0];
+        ima_state_t st = {h.predictor, h.step_index};
+        ima_decode(&st, d + AUDIO_HDR_LEN, samples / 2, pcm);
+        uint32_t w = writeTotal;
+        for (uint32_t i = 0; i < samples; i++) ring[(w + i) % RING_SAMPLES] = pcm[i];
+        writeTotal = w + samples;
+    }
+    if (h.flags & AUDIO_FLAG_END) streamEnded = true;
 }
 
 }  // namespace speaker

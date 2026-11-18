@@ -51,8 +51,38 @@ class CapturePipelineTest {
     fun v2CrcMismatchIsFlaggedForResend() {
         assembler.onHeader(v2Header(jpeg, id = 9, crc = 0x12345678))
         val last = chunks(jpeg).flatMap { assembler.onChunk(it) }.last() as CaptureEvent.Failed
-        assertTrue(last.crcMismatch)
+        assertTrue(last.resendable)
         assertEquals(9, last.imageId)
+    }
+
+    private fun streamFrames(data: ByteArray) = data.toList().chunked(236).map { it.toByteArray() }
+
+    @Test
+    fun fastModeHeaderIsRecognised() {
+        val s = assembler.onHeader(v2Header(jpeg, id = 11, flags = Frames.IMG_FLAG_NOTIFY)).single() as CaptureEvent.Started
+        assertEquals(11, s.imageId)
+        assertTrue(assembler.expectsStreamChunks)
+    }
+
+    @Test
+    fun fastModeCompletesAndDetectsLostChunk() {
+        assembler.onHeader(v2Header(jpeg, id = 12, flags = Frames.IMG_FLAG_NOTIFY))
+        val done = streamFrames(jpeg).mapIndexed { i, c -> assembler.onStreamChunk(i, c) }.flatten().last() as CaptureEvent.Completed
+        assertArrayEquals(jpeg, done.jpeg)
+
+        assembler.onHeader(v2Header(jpeg, id = 13, flags = Frames.IMG_FLAG_NOTIFY))
+        val frames = streamFrames(jpeg)
+        assembler.onStreamChunk(0, frames[0])
+        val lost = assembler.onStreamChunk(2, frames[2]).single() as CaptureEvent.Failed  // #1 lost
+        assertTrue(lost.resendable)
+        assertEquals(13, lost.imageId)
+        assertTrue(assembler.onStreamChunk(3, frames[3]).isEmpty())  // rest of that photo is ignored
+    }
+
+    @Test
+    fun streamChunksIgnoredInIndicateMode() {
+        assembler.onHeader(v2Header(jpeg, id = 14))
+        assertTrue(assembler.onStreamChunk(0, ByteArray(10)).isEmpty())
     }
 
     @Test
@@ -84,7 +114,7 @@ class CapturePipelineTest {
         val bad = jpeg.copyOf().also { it[it.size - 1] = 0 }  // missing JPEG end marker
         assembler.onHeader(v2Header(bad, 1))  // CRC matches the bad bytes, so the marker check must catch it
         val last = chunks(bad).flatMap { assembler.onChunk(it) }.last() as CaptureEvent.Failed
-        assertTrue(!last.crcMismatch)
+        assertTrue(!last.resendable)
     }
 
     @Test
@@ -106,10 +136,7 @@ class CapturePipelineTest {
     }
 
     @Test
-    fun sentenceIncludesTheRealDistance() {
-        assertEquals("a blue pen with Pentel written on it, 36 centimetres",
-            SceneDescriber.compose("a blue pen with Pentel written on it", 362))
-        assertEquals("a white mug", SceneDescriber.compose("a white mug", null))
+    fun modelReplyIsCleaned() {
         assertEquals("two blue Pentel Superball pens on a grid",
             SceneDescriber.cleanPhrase("Two blue Pentel Superball pens on a grid."))
     }

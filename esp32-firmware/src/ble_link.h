@@ -21,8 +21,13 @@ size_t maxPayload();
 
 /** Notifies an event: [type][millis u32][payload]. False if not subscribed / no buffers. */
 bool sendEvent(uint8_t type, const uint8_t* payload = nullptr, size_t len = 0);
-/** v2 header + JPEG chunks as indications, each waiting for the phone's ACK. */
-bool sendImage(const camera::Shot& shot, uint8_t flags);
+/**
+ * v2 header (indication) + JPEG. Chunks go as ACKed indications on IMAGE_DATA, or,
+ * with viaNotify, as sequence-numbered AUDIO_UP notifications (stream 5): ~12x faster
+ * in the first hardware test (5.3 vs 66.8 KB/s). The phone detects gaps and asks for
+ * a resend, which always uses indications.
+ */
+bool sendImage(const camera::Shot& shot, uint8_t flags, bool viaNotify);
 /** Notifies one AUDIO_UP frame, retrying briefly when the stack is out of buffers. */
 bool notifyAudio(const uint8_t* frame, size_t len, uint16_t* retries = nullptr);
 

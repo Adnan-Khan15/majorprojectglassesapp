@@ -23,6 +23,7 @@ extern "C" {
 #define IMG_FLAG_QUESTION 0x01   // photo belongs to a hold-to-talk question
 #define IMG_FLAG_RETRIED  0x02   // first frame was suspiciously small; this is the retry
 #define IMG_FLAG_RESEND   0x04   // resent after RESEND_IMAGE
+#define IMG_FLAG_NOTIFY   0x08   // chunks follow as AUDIO_UP notifications, stream STREAM_IMAGE (not IMAGE_DATA)
 typedef struct {
     uint8_t version;   // 2
     uint8_t flags;
@@ -42,6 +43,7 @@ typedef struct {
 #define STREAM_SPEECH     2   // down: spoken answer
 #define STREAM_THROUGHPUT 3   // either way: test payload
 #define STREAM_MIC_TEST   4   // up: Diagnostics record-and-play-back
+#define STREAM_IMAGE      5   // up: photo chunks in fast (notify) mode, codec RAW
 typedef struct {
     uint8_t stream;
     uint8_t flags;
@@ -100,7 +102,11 @@ enum {
     CMD_EARCON = 0x0E,           // u8 earcon (0 listening, 1 thinking, 2 error, 3 ready)
     CMD_MIC_TEST = 0x0F,         // u8 seconds: record and stream on STREAM_MIC_TEST
 };
-enum { PARAM_HOLD_MS = 1, PARAM_TOF_SAMPLES = 2, PARAM_MIC_GAIN_X10 = 3, PARAM_CEILING = 4 };
+enum {
+    PARAM_HOLD_MS = 1, PARAM_TOF_SAMPLES = 2, PARAM_MIC_GAIN_X10 = 3, PARAM_CEILING = 4,
+    PARAM_DATA_LEN = 5,     // LL data length request (experiments, not saved)
+    PARAM_IMAGE_MODE = 6,   // 0 = indications on IMAGE_DATA (default), 1 = notifications on AUDIO_UP stream 5
+};
 
 // ---- capabilities (EVT_CAPS payload) ----
 #define CAPS_LEN 25
@@ -109,6 +115,9 @@ enum { PARAM_HOLD_MS = 1, PARAM_TOF_SAMPLES = 2, PARAM_MIC_GAIN_X10 = 3, PARAM_C
 #define FEAT_SPEAKER 0x04
 #define FEAT_MIC    0x08
 #define FEAT_PSRAM  0x10
+#define FEAT_IMG_NOTIFY 0x20     // supports PARAM_IMAGE_MODE = 1
+#define FEAT_SPEECH_STREAM 0x40  // plays STREAM_SPEECH audio from AUDIO_DOWN with credits
+#define FEAT_HOLD_TO_TALK 0x80   // tap/hold button + STREAM_QUESTION mic audio
 #define TOF_TYPE_NONE 0
 #define TOF_TYPE_VL53L0X 1
 typedef struct {

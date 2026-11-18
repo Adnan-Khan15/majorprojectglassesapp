@@ -5,7 +5,7 @@ import java.util.zip.CRC32
 /** Progress of one capture arriving from the glasses. */
 sealed interface CaptureEvent {
     /** [v1Tof] is set only by v1 firmware, which put the distance in the header. */
-    data class Started(val totalBytes: Int, val imageId: Int?, val question: Boolean, val v1Tof: TofReading?) : CaptureEvent
+    data class Started(val totalBytes: Int, val imageId: Int?, val question: Boolean, val v1Tof: TofReading?, val resend: Boolean = false) : CaptureEvent
     data class Progress(val receivedBytes: Int, val totalBytes: Int) : CaptureEvent
     data class Completed(
         val jpeg: ByteArray,
@@ -15,8 +15,8 @@ sealed interface CaptureEvent {
         val v1Tof: TofReading?,
         val retriedSmallFrame: Boolean,
     ) : CaptureEvent
-    /** [crcMismatch]: every byte arrived but the checksum is wrong, so a resend may help. */
-    data class Failed(val reason: String, val imageId: Int? = null, val crcMismatch: Boolean = false) : CaptureEvent
+    /** [resendable]: the glasses still have this photo and a resend may fix it (bad checksum or a lost fast-mode chunk). */
+    data class Failed(val reason: String, val imageId: Int? = null, val resendable: Boolean = false) : CaptureEvent
 }
 
 /**
@@ -31,6 +31,7 @@ class ImageAssembler(private val now: () -> Long) {
     private var buffer: ByteArray? = null
     private var received = 0
     private var startedAt = 0L
+    private var nextSeq = 0
 
     val inProgress: Boolean @Synchronized get() = buffer != null
 
@@ -48,7 +49,28 @@ class ImageAssembler(private val now: () -> Long) {
         buffer = ByteArray(h.size.toInt())
         startedAt = now()
         val v1Tof = if (h.version == 1) TofReading.fromV1(h.v1DistanceMm) else null
-        return events + CaptureEvent.Started(h.size.toInt(), h.imageId, h.flags and Frames.IMG_FLAG_QUESTION != 0, v1Tof)
+        return events + CaptureEvent.Started(h.size.toInt(), h.imageId, h.flags and Frames.IMG_FLAG_QUESTION != 0, v1Tof,
+            resend = h.flags and Frames.IMG_FLAG_RESEND != 0)
+    }
+
+    /** True if the current photo's chunks come as AUDIO_UP stream-5 notifications. */
+    val expectsStreamChunks: Boolean @Synchronized get() = header?.let { it.flags and Frames.IMG_FLAG_NOTIFY != 0 } == true
+
+    /**
+     * Fast mode: one AUDIO_UP frame of stream 5. Notifications aren't acknowledged, so
+     * a sequence gap means a lost chunk: the photo fails as resendable.
+     */
+    @Synchronized
+    fun onStreamChunk(seq: Int, data: ByteArray): List<CaptureEvent> {
+        if (!expectsStreamChunks) return emptyList()
+        if (seq != nextSeq) {
+            val id = header?.imageId
+            val reason = "lost photo chunk(s): expected #$nextSeq, got #$seq"
+            reset()
+            return listOf(CaptureEvent.Failed(reason, id, resendable = true))
+        }
+        nextSeq = (nextSeq + 1) and 0xFFFF
+        return onChunk(data)
     }
 
     @Synchronized
@@ -69,7 +91,7 @@ class ImageAssembler(private val now: () -> Long) {
         h.crc32?.let { want ->
             val got = CRC32().apply { update(buf) }.value
             if (got != want) {
-                return listOf(CaptureEvent.Failed("checksum mismatch (got %08x, expected %08x)".format(got, want), h.imageId, crcMismatch = true))
+                return listOf(CaptureEvent.Failed("checksum mismatch (got %08x, expected %08x)".format(got, want), h.imageId, resendable = true))
             }
         }
         if (!looksLikeJpeg(buf)) return listOf(CaptureEvent.Failed("received ${buf.size} bytes but they are not a valid JPEG", h.imageId))
@@ -92,6 +114,7 @@ class ImageAssembler(private val now: () -> Long) {
     }
 
     private fun reset() {
+        nextSeq = 0
         header = null
         buffer = null
         received = 0

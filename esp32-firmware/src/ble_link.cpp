@@ -190,17 +190,23 @@ static bool indicateAndWait(NimBLECharacteristic* c, const uint8_t* data, size_t
     return isConnected;
 }
 
-bool sendImage(const camera::Shot& shot, uint8_t flags) {
+bool sendImage(const camera::Shot& shot, uint8_t flags, bool viaNotify) {
     abortImage = false;
+    if (viaNotify && !audioUpSub) viaNotify = false;
+    if (viaNotify) flags |= IMG_FLAG_NOTIFY;
     img_header_t h = {2, flags, shot.id, (uint32_t)shot.len, crc32_update(0, shot.jpeg, shot.len), shot.width, shot.height};
     uint8_t hdr[IMG_HDR_V2_LEN];
     img_header_pack(&h, hdr);
     uint32_t t0 = millis();
     bool ok = indicateAndWait(controlChar, hdr, sizeof hdr);
-    Serial.printf("[BLE] image %u header sent: %lu bytes, crc %08lx -> %s\n", shot.id, (unsigned long)h.size,
-                  (unsigned long)h.crc32, ok ? "acknowledged" : "FAILED");
+    Serial.printf("[BLE] image %u header sent: %lu bytes, crc %08lx, %s -> %s\n", shot.id, (unsigned long)h.size,
+                  (unsigned long)h.crc32, viaNotify ? "notify mode" : "indicate mode", ok ? "acknowledged" : "FAILED");
     size_t chunk = maxPayload();
+    if (viaNotify) chunk -= AUDIO_HDR_LEN;
     size_t sent = 0, packets = 0;
+    uint16_t retries = 0;
+    uint8_t frame[256];
+    audio_header_t ah = {STREAM_IMAGE, AUDIO_FLAG_START, 0, 0, 0, AUDIO_CODEC_RAW};
     while (ok && sent < shot.len) {
         if (abortImage) {
             Serial.printf("[BLE] image %u aborted by phone after %u bytes\n", shot.id, (unsigned)sent);
@@ -209,14 +215,24 @@ bool sendImage(const camera::Shot& shot, uint8_t flags) {
             return false;
         }
         size_t n = min(chunk, shot.len - sent);
-        ok = indicateAndWait(imageChar, shot.jpeg + sent, n);
+        if (viaNotify) {
+            if (sent + n >= shot.len) ah.flags |= AUDIO_FLAG_END;
+            audio_header_pack(&ah, frame);
+            memcpy(frame + AUDIO_HDR_LEN, shot.jpeg + sent, n);
+            ok = notifyAudio(frame, AUDIO_HDR_LEN + n, &retries);
+            ah.seq++;
+            ah.flags = 0;
+        } else {
+            ok = indicateAndWait(imageChar, shot.jpeg + sent, n);
+        }
         if (ok) { sent += n; packets++; }
     }
     uint32_t ms = millis() - t0;
     if (ok) {
-        Serial.printf("[BLE] IMAGE_DATA sent: %u bytes in %u packets of <=%u B, %lu ms (%.1f KB/s)\n",
+        Serial.printf("[BLE] image sent: %u bytes in %u packets of <=%u B, %lu ms (%.1f KB/s)%s\n",
                       (unsigned)sent, (unsigned)packets, (unsigned)chunk, (unsigned long)ms,
-                      ms ? sent / 1.024 / ms : 0.0);
+                      ms ? sent / 1.024 / ms : 0.0, viaNotify ? ", notify mode" : "");
+        if (retries) Serial.printf("[BLE] (%u out-of-buffer retries)\n", retries);
     } else {
         Serial.printf("[BLE] transfer ABORTED after %u of %u bytes (%lu ms)\n", (unsigned)sent, (unsigned)shot.len, (unsigned long)ms);
     }
