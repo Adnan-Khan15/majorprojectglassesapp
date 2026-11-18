@@ -83,11 +83,32 @@ class SceneDescriber(context: Context, private val scope: CoroutineScope, privat
             loadedPath = path
             Log.d(TAG, "Gemma loaded on ${gemma.backendName} in $ms ms")
             _state.value = ModelState.Ready(gemma.backendName, ms)
+            warmUp()
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             Log.e(TAG, "Gemma load failed", t)
             _state.value = ModelState.Fallback(t.message ?: t::class.simpleName ?: "unknown error")
+        }
+    }
+
+    /**
+     * The first answer after loading was 2.5x slower than the second in the first
+     * hardware test (8.2 s vs 3.3 s), which looks like one-time GPU/kernel warm-up.
+     * Run one tiny throwaway inference now, so the user's first question doesn't pay it.
+     * Real requests queue behind it on Gemma's single thread.
+     */
+    private fun warmUp() {
+        scope.launch {
+            try {
+                val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.GRAY) }
+                val jpeg = ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
+                val t0 = SystemClock.elapsedRealtime()
+                gemma.describe(jpeg, null)
+                Log.d(TAG, "Gemma warm-up inference took ${SystemClock.elapsedRealtime() - t0} ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "warm-up failed (not fatal)", e)
+            }
         }
     }
 

@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 struct Settings {
-    uint8_t volume = 60;          // 0-100 % OF THE CEILING below (not of full scale)
+    uint8_t volume = 100;         // 0-100 % OF THE CEILING below (not of full scale). The ceiling is the cap
     uint8_t ceilingPct = 50;      // hard cap, % of full scale. Protects the 1 W speaker
     uint16_t holdMs = 500;        // press >= this = hold-to-talk, shorter = tap
     uint8_t tofSamples = 5;       // samples per capture-time ToF reading

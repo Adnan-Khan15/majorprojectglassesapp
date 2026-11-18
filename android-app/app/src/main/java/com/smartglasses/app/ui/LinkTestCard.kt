@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Slider
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -40,7 +44,12 @@ import kotlinx.coroutines.withTimeout
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LinkTestCard() {
-    val link = LocalContext.current.glassesApp.link
+    val app = LocalContext.current.glassesApp
+    val link = app.link
+    val settings = app.settings
+    val volume by settings.glassesVolume.state.collectAsStateWithLifecycle()
+    val ceiling by settings.glassesCeiling.state.collectAsStateWithLifecycle()
+    val fast by settings.fastPhotos.state.collectAsStateWithLifecycle()
     val caps by link.caps.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val results = remember { mutableStateListOf<String>() }
@@ -68,6 +77,37 @@ fun LinkTestCard() {
             Checkbox(checked = use2m, onCheckedChange = { use2m = it; scope.launch { link.request2mPhy(it) } })
             Text("Request 2M PHY")
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = fast, onCheckedChange = {
+                settings.fastPhotos.set(it)
+                scope.launch { link.sendCommand(Frames.cmdSetParam(Frames.PARAM_IMAGE_MODE, if (it) 1 else 0)) }
+            })
+            Text("Fast photo transfer (notifications)")
+        }
+
+        Text("Glasses speaker: volume $volume % of a $ceiling % ceiling = ${volume * ceiling / 100} % of full power",
+            style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = volume.toFloat(), valueRange = 0f..100f, steps = 9,
+            onValueChange = { settings.glassesVolume.set(it.toInt()) },
+            onValueChangeFinished = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_SET_VOLUME, settings.glassesVolume.value)) } },
+            modifier = Modifier.semantics { contentDescription = "Glasses volume $volume percent" },
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(30, 50, 70, 100).forEach { c ->
+                FilterChip(selected = ceiling == c, onClick = {
+                    settings.glassesCeiling.set(c)
+                    scope.launch { link.sendCommand(Frames.cmdSetParam(Frames.PARAM_CEILING, c)) }
+                }, label = { Text("Ceiling $c %") })
+            }
+        }
+        if (ceiling > 50) Text("Above 50 %: listen for distortion or rattling, and check the glasses don't restart (a brownout shows on the next connect). Go back to 50 % if they do.",
+            color = StatusColors.bad, style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(500, 1000, 2000, 3000).forEach { hz ->
+                OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdTone(hz, 1000)) } }) { Text("Tone $hz Hz") }
+            }
+        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !running, onClick = { run("Uplink") { ThroughputTest(link).uplink(100_000).toString() } }) { Text("Uplink 100 KB") }
             OutlinedButton(enabled = !running, onClick = { run("Downlink") { ThroughputTest(link).downlink(100_000, 244).toString() } }) { Text("Downlink 100 KB") }
@@ -82,7 +122,6 @@ fun LinkTestCard() {
                     "Ping round trip ${android.os.SystemClock.elapsedRealtime() - t0} ms ($pong)"
                 }
             }) { Text("Ping") }
-            OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdTone(1000, 500)) } }) { Text("Test tone") }
             OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_TOF_READ, 5)) } }) { Text("Read ToF") }
             OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_CAPTURE, Frames.MODE_PHONE)) } }) { Text("Capture") }
         }

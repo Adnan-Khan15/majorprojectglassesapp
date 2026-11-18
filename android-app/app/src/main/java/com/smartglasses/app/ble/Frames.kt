@@ -14,6 +14,8 @@ object Frames {
     const val IMG_FLAG_QUESTION = 0x01
     const val IMG_FLAG_RETRIED = 0x02
     const val IMG_FLAG_RESEND = 0x04
+    /** Chunks follow as AUDIO_UP notifications on [STREAM_IMAGE] (fast mode). */
+    const val IMG_FLAG_NOTIFY = 0x08
 
     const val AUDIO_HDR_LEN = 8
     const val AUDIO_FLAG_START = 0x01
@@ -24,6 +26,7 @@ object Frames {
     const val STREAM_SPEECH = 2
     const val STREAM_THROUGHPUT = 3
     const val STREAM_MIC_TEST = 4
+    const val STREAM_IMAGE = 5
 
     const val TOF_LIVE_IMAGE_ID = 0xFFFF
     const val MODE_TAP = 0
@@ -58,6 +61,7 @@ object Frames {
     const val PARAM_MIC_GAIN_X10 = 3
     const val PARAM_CEILING = 4
     const val PARAM_DATA_LEN = 5
+    const val PARAM_IMAGE_MODE = 6
 
     const val CAPS_LEN = 25
 
@@ -145,6 +149,9 @@ object Frames {
         val hasTof get() = features and 0x02 != 0
         val hasSpeaker get() = features and 0x04 != 0
         val hasMic get() = features and 0x08 != 0
+        val hasImageNotify get() = features and 0x20 != 0
+        val hasSpeechStream get() = features and 0x40 != 0
+        val hasHoldToTalk get() = features and 0x80 != 0
         val brownoutReset get() = resetReason == 9
     }
 

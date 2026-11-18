@@ -54,3 +54,17 @@ Flash the new firmware **and** install the new app together: v2 firmware sends a
 Record the phone model and Android version with every throughput result.
 
 **Observed on the first M3 run (not one of the tests above, but important):** photos go over IMAGE_DATA (one acknowledged indication per 244-byte chunk) at **5.3 KB/s**: 12.8–13.7 KB took 2.4–2.5 s. The same link carried notifications at 66.8 KB/s. Image transfer is therefore the largest fixed cost in a tap after the model itself.
+
+## M3.1: fast photo transfer, warm-up, speaker volume
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 3.1.1 | Connect; serial log | `[BLE] photo transfer mode: notify (fast)` right after connecting | |
+| 3.1.2 | 10 taps with **Fast photo transfer** on (Link tests card) | Log: `IMAGE_DATA complete … KB/s` well above the 5.3 KB/s of M3. Serial: `image sent: … notify mode`. Record KB/s and button → speech time | |
+| 3.1.3 | Untick **Fast photo transfer**, 10 taps | Back to ~5.3 KB/s (A/B comparison) | |
+| 3.1.4 | Watch for `lost photo chunk(s)` → `asking the glasses to resend photo N` | If it happens: the photo still gets described (resent over the slow path). Count how often | |
+| 3.1.5 | **Warm-up.** Restart the app, wait for "Gemma ready", then tap | `adb logcat -s SceneDescriber` shows `warm-up inference took … ms`; the FIRST real answer is about as fast as later ones (compare image complete → RESULT_TEXT with M3's 8.2 s vs 3.3 s) | |
+| 3.1.6 | **Volume.** Tone 1000 Hz at volume 100 %, ceiling 50 % (the new default) | Clearly louder than M3's test tone (30 % → 50 % of full scale, +4.4 dB) | |
+| 3.1.7 | Tones 500 / 1000 / 2000 / 3000 Hz | Note which is loudest (small speakers are often weakest at low frequencies) | |
+| 3.1.8 | Ceiling 70 %, Tone 1000 Hz, then back to 50 % | Louder. Note any distortion/rattle; reconnect and check the caps line doesn't say BROWNOUT | |
+| 3.1.9 | Report amp wiring: VIN on 5V or 3V3? GAIN and SD connected where? | | |

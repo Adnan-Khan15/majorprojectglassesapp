@@ -127,6 +127,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 failures = 0
                 setState(LinkState.Connected(name, mgr.negotiatedMtu))
                 log("Connected to $name (${device.address}), MTU ${mgr.negotiatedMtu}")
+                configured = false
                 if (mgr.hasV2) sendCommand(Frames.cmd(Frames.CMD_GET_CAPS))
                 mgr.stateAsFlow().first { it is ConnectionState.Disconnected }
                 log("Glasses disconnected")
@@ -211,7 +212,7 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
                 is CaptureEvent.Failed -> {
                     log("Photo transfer failed: ${e.reason}")
                     // A checksum mismatch with every byte present: ask once for the same photo again.
-                    if (e.crcMismatch && e.imageId != null && resendRequested.add(e.imageId)) {
+                    if (e.resendable && e.imageId != null && resendRequested.add(e.imageId)) {
                         log("→ asking the glasses to resend photo ${e.imageId}")
                         scope.launch { sendCommand(Frames.cmdU16(Frames.CMD_RESEND_IMAGE, e.imageId)) }
                         continue  // not a failure yet: the resend will arrive as a new capture
@@ -228,6 +229,10 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
         when (e) {
             is GlassesEvent.CapsEvent -> {
                 _caps.value = e.caps
+                if (!configured) {
+                    configured = true
+                    onFirstCaps?.let { hook -> scope.launch { hook(e.caps) } }
+                }
                 log("Glasses firmware ${e.caps.firmware}, protocol v${e.caps.protocol}: camera=${e.caps.hasCamera} " +
                     "ToF=${e.caps.hasTof} speaker=${e.caps.hasSpeaker} mic=${e.caps.hasMic}, reset reason ${e.caps.resetReason}" +
                     if (e.caps.brownoutReset) " (BROWNOUT)" else "")
@@ -248,8 +253,22 @@ class GlassesLink(private val context: Context, private val scope: CoroutineScop
     }
 
     private fun onAudioUp(bytes: ByteArray) {
+        if (bytes.isNotEmpty() && (bytes[0].toInt() and 0xFF) == Frames.STREAM_IMAGE) {
+            val (h, data) = Frames.parseAudio(bytes) ?: return
+            emitAll(assembler.onStreamChunk(h.seq, data))
+            if (assembler.inProgress) armStallWatchdog() else stallWatchdog?.cancel()
+            return
+        }
         _audioUp.tryEmit(bytes)
     }
+
+    /**
+     * Called once per connection when the glasses' capabilities first arrive: the app
+     * pushes its settings (photo mode, volume, ...). Not on later CAPS replies, which
+     * SET_PARAM itself triggers.
+     */
+    var onFirstCaps: (suspend (Frames.Caps) -> Unit)? = null
+    @Volatile private var configured = false
 
     /** Waits for the ToF reading the glasses send after image [imageId]; MISSING on timeout. */
     suspend fun awaitTof(imageId: Int, timeoutMs: Long): TofReading {

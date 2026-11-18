@@ -20,6 +20,8 @@ static constexpr uint32_t DEBOUNCE_MS = 40;
 static constexpr uint32_t TOF_WAIT_MS = 4000;  // after the image; N x 200 ms budget fits easily
 
 static uint32_t pressedAtMs = 0;
+// Set by the phone after connecting (PARAM_IMAGE_MODE); old apps never set it, so photos stay on indications.
+static volatile bool imageViaNotify = false;
 
 // ============================ Events ============================
 
@@ -29,7 +31,7 @@ static void sendCaps() {
     c.protocol = PROTOCOL_VERSION;
     c.fw_major = FW_MAJOR; c.fw_minor = FW_MINOR; c.fw_patch = FW_PATCH;
     c.features = (camera::ok() ? FEAT_CAMERA : 0) | (tof::ok() ? FEAT_TOF : 0) | (speaker::ok() ? FEAT_SPEAKER : 0) |
-                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0);
+                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0) | FEAT_IMG_NOTIFY;
     c.audio_rate = speaker::SAMPLE_RATE;
     c.samples_per_frame = mic::BLOCK_SAMPLES;
     c.codec = AUDIO_CODEC_ADPCM;
@@ -93,7 +95,7 @@ static void captureAndSend(uint8_t mode) {
     ble::sendEvent(EVT_PHOTO_CAPTURED, p, sizeof p);
 
     uint8_t flags = (mode == MODE_QUESTION ? IMG_FLAG_QUESTION : 0) | (shot.firstLen ? IMG_FLAG_RETRIED : 0);
-    bool ok = ble::sendImage(shot, flags);
+    bool ok = ble::sendImage(shot, flags, imageViaNotify);
 
     tof_result_t r;
     tof::waitAsync(r, TOF_WAIT_MS);
@@ -108,7 +110,8 @@ static void resendLast(uint16_t imageId) {
     const camera::Shot& s = camera::last();
     if (!s.jpeg || s.id != imageId) { sendError(ERR_CAMERA, "image no longer available"); return; }
     Serial.printf("[CAP] resending image %u\n", imageId);
-    if (!ble::sendImage(s, IMG_FLAG_RESEND) && ble::connected()) ble::reset();
+    // Resends always use ACKed indications: slower but no gaps possible.
+    if (!ble::sendImage(s, IMG_FLAG_RESEND, false) && ble::connected()) ble::reset();
 }
 
 static void tap() {
@@ -176,7 +179,11 @@ static void handleCommand(const uint8_t* c, size_t n) {
                 case PARAM_TOF_SAMPLES: if (v >= 1 && v <= 15) s.tofSamples = v; break;
                 case PARAM_MIC_GAIN_X10: if (v >= 1 && v <= 160) s.micGainX10 = v; break;
                 case PARAM_CEILING: if (v >= 1 && v <= 100) { s.ceilingPct = v; speaker::applyVolume(); } break;
-                case 5: ble::setDataLength(v); break;  // LL data length (throughput experiments, not saved)
+                case PARAM_DATA_LEN: ble::setDataLength(v); break;  // experiments, not saved
+                case PARAM_IMAGE_MODE:
+                    imageViaNotify = v == 1;
+                    Serial.printf("[BLE] photo transfer mode: %s\n", imageViaNotify ? "notify (fast)" : "indicate");
+                    break;
             }
             settings::save();
             sendCaps();
@@ -241,6 +248,7 @@ void setup() {
 }
 
 void loop() {
+    if (!ble::connected()) imageViaNotify = false;  // each app session opts in again
     if (buttonPressed()) tap();
     uint8_t cmd[24];
     if (size_t n = ble::pollCommand(cmd, sizeof cmd)) handleCommand(cmd, n);
