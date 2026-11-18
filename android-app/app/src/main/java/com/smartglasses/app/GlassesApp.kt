@@ -6,6 +6,9 @@ import com.smartglasses.app.ai.ModelStore
 import com.smartglasses.app.ai.PrefsVerifiedCache
 import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.assistant.AssistantSession
+import com.smartglasses.app.assistant.StateAnnouncer
+import com.smartglasses.app.history.HistoryStore
+import kotlinx.coroutines.launch
 import com.smartglasses.app.ble.Frames
 import com.smartglasses.app.ble.GlassesLink
 import com.smartglasses.app.settings.AppSettings
@@ -43,6 +46,8 @@ class GlassesApp : Application() {
     val latencyLog by lazy { LatencyLog(filesDir) }
     val androidStt by lazy { AndroidOnDeviceStt(this) }
     val session by lazy { AssistantSession(appScope, link, describer, speech, latencyLog, settings, androidStt) }
+    val history by lazy { HistoryStore(java.io.File(filesDir, "history"), appScope) }
+    private val announcer by lazy { StateAnnouncer(appScope, link, describer, speech, settings) }
     /** Hold-to-talk audio and Diagnostics mic tests from the glasses' microphone. */
     val glassesMic by lazy { GlassesMicReceiver(link, appScope, session::glassesQuestionStarted, session::glassesQuestionAudio) }
 
@@ -64,6 +69,9 @@ class GlassesApp : Application() {
         tts  // start the TTS engine now, not on the first capture
         session.start()
         glassesMic.start()
+        history.load()
+        appScope.launch { session.completed.collect { history.add(it) } }
+        announcer.start()
     }
 }
 

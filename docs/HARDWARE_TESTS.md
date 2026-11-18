@@ -114,3 +114,18 @@ Settings → Speak on: **Glasses** (default). Volume and ceiling as set in M3.1.
 | 6.8 | 10 hold-to-talk questions; export the latency CSV; `scripts/latency_report.py latency.csv --mode question` | p50/p90 for button_down → record_start → button_up → image_received → answer_complete → play_started | |
 | 6.9 | Glasses mic quality: Diagnostics → **Mic test** (record 3 s on the glasses, play back on the phone) | Speech intelligible; adjust `set micgain` if too quiet or clipping | |
 | 6.10 | Serial `h` (simulated 2 s hold) | Listening beep, 2 s recording, thinking beeps, answer | |
+
+## M7: app UI (any phone; no glasses needed for most)
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 7.1 | Fresh install | Setup wizard: Bluetooth (required), notifications, microphone, AI model, glasses, each with live ✓ and plain instructions; Continue only once Bluetooth is allowed | |
+| 7.2 | Home | Three chips (Glasses / AI model / Speech) in words, not just colour; tapping each opens details. "Describe what's ahead", "Hold to ask with phone mic", "Try with a photo" | |
+| 7.3 | Describe, then **Replay** and **Stop** on the result card | Replay repeats the last answer; Stop cuts it off (glasses and phone) | |
+| 7.4 | **TalkBack on**: navigate Home, Settings, History | Every control is announced with a meaningful label; the result card and chips announce changes | |
+| 7.5 | History after a few interactions | Thumbnails, question, answer, time; detail shows transcript, photo, ToF median/samples/spread/flags, latency per stage; Export JSON and CSV open the system "save as"; Delete works | |
+| 7.6 | Settings: change Speak on, volume, ceiling, hold time, fast photos | Takes effect immediately on connected glasses (serial shows the new values / caps) | |
+| 7.7 | Diagnostics: Ping, tones, Speak test sentence, ToF live, mic meter, mic test + Play, throughput, latency export, STT spike, Bluetooth log | All work as in M3–M6 | |
+| 7.8 | **ToF calibration**: Diagnostics walk-through at 20 / 50 / 100 cm with a tape measure, Save | Fit line shown (scale, offset, worst error); later distances use it (History shows the raw median; the spoken distance is calibrated) | |
+| 7.9 | Announce status on: switch the glasses off and on | "Glasses disconnected." (phone) … "Glasses connected." | |
+| 7.10 | Dark mode / large system font | Readable, nothing cut off | |
