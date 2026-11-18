@@ -40,15 +40,17 @@ Flash the new firmware **and** install the new app together: v2 firmware sends a
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| 3.1 | Connect; check the app's link log and the **Link tests** card | `Glasses firmware speaks protocol v2`, then `Glasses firmware 0.4.0, protocol v2: camera=true ToF=true speaker=true mic=true, reset reason 1` | |
-| 3.2 | **Tap.** Press the button | Serial: `image N header sent … crc …`, `IMAGE_DATA sent`, then `[TOF] 5 samples in ~1000 ms`, `[CAP] … press -> done … ms`. App: speaks the sentence with the distance. Log: `← ToF for image N: … mm` arrives **after** the image | |
+| 3.1 | Connect; check the app's link log and the **Link tests** card | `Glasses firmware speaks protocol v2`, then `Glasses firmware 0.4.0, protocol v2: camera=true ToF=true speaker=true mic=true, reset reason 1` |PASS (2026-11-18): `firmware 0.4.0, protocol v2: camera=true ToF=true speaker=true mic=true, reset reason 1`, MTU 515 |
+| 3.2 | **Tap.** Press the button | Serial: `image N header sent … crc …`, `IMAGE_DATA sent`, then `[TOF] 5 samples in ~1000 ms`, `[CAP] … press -> done … ms`. App: speaks the sentence with the distance. Log: `← ToF for image N: … mm` arrives **after** the image |PASS: photo 2, 13652 B in 2519 ms; ToF event 49 ms after the image (255 mm, 5/5 valid, spread 1 mm); spoken sentence ended "…, 26 centimetres". Photo 1 (0/5 valid, flags 0x02) correctly gave a sentence with no distance |
 | 3.3 | **Tap latency vs M2.** 10 taps; compare `press -> done` with M2 | Shorter than M2's capture+ToF+transfer, because the ToF is now measured during the transfer | |
 | 3.4 | **Ping** button, 10 times | Round trip in ms (record min/median/max) | |
-| 3.5 | **Uplink 100 KB**, 3 runs | `uplink (notify): X KB/s, … missing (Y %)` | |
-| 3.6 | **Downlink 100 KB**, 3 runs | `downlink (write without response): X KB/s, … missing (Y %)` | |
+| 3.5 | **Uplink 100 KB**, 3 runs | `uplink (notify): X KB/s, … missing (Y %)` |1 run so far: board view 100 000 B in 1461 ms = **66.8 KB/s**, 424 frames, 0 failed, 319 out-of-buffer retries. Phone-side KB/s/loss not captured |
+| 3.6 | **Downlink 100 KB**, 3 runs | `downlink (write without response): X KB/s, … missing (Y %)` |1 run so far: 100 000 B, 424 frames, **0 missing**, 2013 ms = **48.5 KB/s** (board measured) |
 | 3.7 | Tick **Request 2M PHY**, repeat 3.5 and 3.6 | Serial shows `PHY now tx 2 rx 2` if accepted; record KB/s again | |
-| 3.8 | **Decision:** ADPCM 16 kHz needs ~9.6 KB/s including headers (raw PCM: ~32 KB/s). If both directions sustain ≥ 15 KB/s with < 1 % loss, live ADPCM audio is fine. If not, report the numbers before M4/M6 build on it | | |
-| 3.9 | **Test tone / Read ToF / Capture** buttons | Beep from the glasses / a `ToF for image 65535` line in the log / a photo described and spoken | |
+| 3.8 | **Decision:** ADPCM 16 kHz needs ~9.6 KB/s including headers (raw PCM: ~32 KB/s). If both directions sustain ≥ 15 KB/s with < 1 % loss, live ADPCM audio is fine. If not, report the numbers before M4/M6 build on it | |Provisional: both directions far above 15 KB/s with 0 loss in 1 run each, so live ADPCM is fine. Needs 3 runs each + phone model to confirm |
+| 3.9 | **Test tone / Read ToF / Capture** buttons | Beep from the glasses / a `ToF for image 65535` line in the log / a photo described and spoken |Read ToF works: 0/5 (out of range) ×2, then 34 mm (5/5, spread 2) and 52 mm (5/5, spread 1). Test tone / Capture: no confirmation yet (commands aren't logged) |
 | 3.10 | **Resend.** (Can't be forced from the app.) If the log ever shows `checksum mismatch` → `asking the glasses to resend photo N`, check the photo still gets described | | |
 
 Record the phone model and Android version with every throughput result.
+
+**Observed on the first M3 run (not one of the tests above, but important):** photos go over IMAGE_DATA (one acknowledged indication per 244-byte chunk) at **5.3 KB/s**: 12.8–13.7 KB took 2.4–2.5 s. The same link carried notifications at 66.8 KB/s. Image transfer is therefore the largest fixed cost in a tap after the model itself.

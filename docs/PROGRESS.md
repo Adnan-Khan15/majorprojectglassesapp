@@ -14,7 +14,7 @@
 | Latest test build | Pre-release [**v0.4.0-test**](https://github.com/Adnan-Khan15/majorprojectglassesapp/releases/tag/v0.4.0-test): `SmartGlasses-v0.4-test.apk` (offline flavor, **debug** build, 107 MB) + `smartglasses-firmware-v0.4.0-merged.bin` (flash at `0x0`) |
 | AI model | Not in the APK or in git. Users download [`gemma-4-E2B-it.litertlm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm) (2,588,147,712 bytes, SHA-256 `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c`) and tap **Import from file** |
 | Phase 3 milestones | **M0, M1, M2, M3 implemented.** M4–M8 not started |
-| Hardware verification | **None of Phase 3 has run on the real glasses yet.** The tester (in another city, with the glasses, an Android phone and a PC) is installing v0.4.0-test now |
+| Hardware verification | **First run of v0.4.0-test on 2026-11-18 (tester's report: everything works).** Confirmed from the app log: v2 handshake, tap → photo + ToF → spoken sentence with distance, CRC'd image transfer, live ToF, ping, throughput both ways with 0 loss. Results in `HARDWARE_TESTS.md` (3.1, 3.2, 3.5, 3.6, 3.9). Serial-console tests (M2 section), 3 runs each, 2M PHY and the phone model are still to be recorded |
 | Automated tests | 34 Android unit tests, 10 native firmware tests, 2 Python tests: all pass on a computer |
 
 **Status words used throughout:** *done (host-tested)* means built and covered by tests that run on a computer. *Implemented, awaiting hardware verification* means it builds but touches the board, speaker, mic, BLE radio or phone GPU, so only the tests in [`HARDWARE_TESTS.md`](HARDWARE_TESTS.md) can prove it. Nothing is called "verified" until those tests have been run and recorded.
@@ -200,6 +200,23 @@ Button tap (fires on press, as in v0.3)
 
 ---
 
+## 4a. First hardware results (2026-11-18, from the app's link log)
+
+| Measurement | Value |
+|---|---|
+| Image transfer (indications, 244 B, ACK per chunk) | 12 830 B in 2369 ms and 13 652 B in 2519 ms: **5.3 KB/s** |
+| ToF event after image complete | 85 ms and 49 ms: the ToF overlap works (it adds no time) |
+| Uplink notifications (board view) | 100 000 B in 1461 ms: **66.8 KB/s**, 0 failed, 319 out-of-buffer retries |
+| Downlink write-without-response (board view) | 100 000 B in 2013 ms: **48.5 KB/s**, **0 missing** |
+| Button → sentence sent (≈ speech start), 2nd tap | 5.9 s (2.5 s of it image transfer) |
+| Image complete → sentence sent | 8.2 s (1st capture after connect), 3.3 s (2nd) |
+| Live ToF | 34 mm and 52 mm (5/5 valid, spread ≤ 2 mm); far/dark targets: 0/5 valid, correctly no distance spoken |
+
+**Conclusions (1 run each; confirm with 3):**
+1. Live IMA ADPCM audio (~9.6 KB/s) fits both directions with 5–7× headroom, so M4/M6 go ahead as designed.
+2. **Photos are the slow path**: indications move 5.3 KB/s while notifications move 66.8 KB/s on the same link. Sending photo chunks as sequence-numbered notifications (CRC + resend already exist) is expected to cut ~2 s from every tap. That's an estimate until measured. Proposed as milestone **M3.1** before M4.
+3. The first answer after connecting took 8.2 s vs 3.3 s for the second, which looks like model warm-up. A warm-up inference right after Gemma loads should remove that; confirm in the latency CSV.
+
 ## 5. Decisions, deviations from the prompt, and things that surprised us
 
 | Topic | Decision / finding | Why |
@@ -224,7 +241,7 @@ Button tap (fires on press, as in v0.3)
 
 ## 6. What to do next
 
-### 6.1 Hardware tests (blocking: do these before M4)
+### 6.1 Hardware tests (first results in §4a; finish the rest)
 Run [`HARDWARE_TESTS.md`](HARDWARE_TESTS.md) sections **M0, M2 and M3** with v0.4.0-test, and record the results in the file. Most important:
 - **2.3 LED polarity**, **2.4–2.7 speaker** (clean tone, ceiling, brownouts), **2.8–2.9 mic** (which slot, levels, gain), **2.10–2.11 ToF**, **2.12 tap end-to-end**.
 - **3.3 tap latency vs M2**, **3.4 ping**, **3.5–3.7 throughput up/down, with and without 2M PHY**.
