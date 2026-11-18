@@ -31,7 +31,7 @@ static void sendCaps() {
     c.protocol = PROTOCOL_VERSION;
     c.fw_major = FW_MAJOR; c.fw_minor = FW_MINOR; c.fw_patch = FW_PATCH;
     c.features = (camera::ok() ? FEAT_CAMERA : 0) | (tof::ok() ? FEAT_TOF : 0) | (speaker::ok() ? FEAT_SPEAKER : 0) |
-                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0) | FEAT_IMG_NOTIFY;
+                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0) | FEAT_IMG_NOTIFY | (speaker::ok() ? FEAT_SPEECH_STREAM : 0);
     c.audio_rate = speaker::SAMPLE_RATE;
     c.samples_per_frame = mic::BLOCK_SAMPLES;
     c.codec = AUDIO_CODEC_ADPCM;
@@ -40,8 +40,8 @@ static void sendCaps() {
     c.volume = s.volume;
     c.ceiling = s.ceilingPct;
     c.hold_ms = s.holdMs;
-    c.ring_frames = 0;       // set by the speech stream in M4
-    c.prebuffer_frames = 0;
+    c.ring_frames = speaker::RING_FRAMES;          // phone's initial credit window
+    c.prebuffer_frames = speaker::PREBUFFER_FRAMES;
     c.tof_samples = s.tofSamples;
     uint8_t b[CAPS_LEN];
     caps_pack(&c, b);
@@ -207,6 +207,7 @@ static void handleCommand(const uint8_t* c, size_t n) {
 static void onAudioDown(const uint8_t* d, size_t len) {
     if (len < AUDIO_HDR_LEN) return;
     if (d[0] == STREAM_THROUGHPUT) throughput::onDownFrame(d, len);
+    else if (d[0] == STREAM_SPEECH) speaker::onSpeechFrame(d, len);
 }
 
 // ============================ Button ============================

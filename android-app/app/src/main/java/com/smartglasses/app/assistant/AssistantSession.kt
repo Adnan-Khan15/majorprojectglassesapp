@@ -11,6 +11,7 @@ import com.smartglasses.app.ble.TofReading
 import com.smartglasses.app.metrics.InteractionTimeline
 import com.smartglasses.app.metrics.LatencyLog
 import com.smartglasses.app.metrics.Stage
+import com.smartglasses.app.speech.SpeechOutput
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +64,7 @@ class AssistantSession(
     private val scope: CoroutineScope,
     private val link: GlassesLink,
     private val describer: SceneDescriber,
-    private val announcer: ResultAnnouncer,
+    private val speech: SpeechOutput,
     private val latencyLog: LatencyLog,
 ) {
     private val _run = MutableStateFlow<AssistantRun>(AssistantRun.Idle)
@@ -192,14 +193,9 @@ class AssistantSession(
             // Speak and (for the glasses) send RESULT_TEXT at the same time.
             val sent = if (input.source == Source.GLASSES) async { link.sendResultText(sentence) } else null
             val speechStart = SystemClock.elapsedRealtime()
-            var speechError: String? = null
-            val speechMs = try {
-                announcer.announce(sentence)
-            } catch (e: Exception) {
-                speechError = e.message ?: "speech failed"
-                null
-            }
-            speechMs?.let { t.mark(Stage.PLAY_STARTED, speechStart + it) }
+            val spoken = speech.say(sentence, t)
+            val speechMs = spoken.startedAfterMs
+            val speechError = spoken.error
             val timing = RunTiming(
                 transferMs = input.transferMs,
                 ocrMs = result.ocrMs,
@@ -211,10 +207,10 @@ class AssistantSession(
             Log.d(TAG, "${input.source} run: transfer=${timing.transferMs} ocr=${timing.ocrMs} model=${timing.modelMs} " +
                 "describeTotal=${result.totalMs} speechStart=${timing.speechStartMs} total=${timing.totalMs} :: $sentence")
             val sentOk = sent?.await()
-            finish(t, if (speechError == null) "ok" else "speech_failed", speechError)
+            finish(t, if (speechMs != null) "ok" else "speech_failed", speechError)
             _run.value = AssistantRun.Done(
                 input.source, preview, sentence, tof, result, timing,
-                announcer.name, speechError, sentOk,
+                spoken.where, speechError, sentOk,
             )
         }
     }

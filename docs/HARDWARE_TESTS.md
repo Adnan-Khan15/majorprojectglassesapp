@@ -68,3 +68,18 @@ Record the phone model and Android version with every throughput result.
 | 3.1.7 | Tones 500 / 1000 / 2000 / 3000 Hz | Note which is loudest (small speakers are often weakest at low frequencies) | |
 | 3.1.8 | Ceiling 70 %, Tone 1000 Hz, then back to 50 % | Louder. Note any distortion/rattle; reconnect and check the caps line doesn't say BROWNOUT | |
 | 3.1.9 | Report amp wiring: VIN on 5V or 3V3? GAIN and SD connected where? | | |
+
+## M4: speech on the glasses' speaker
+
+Settings → Speak on: **Glasses** (default). Volume and ceiling as set in M3.1.
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 4.1 | Link tests → **Speak test sentence** | The sentence plays **from the glasses**, clearly. The card shows `spoken on glasses, audio started after N ms` and the voice name (ideally en-IN, offline). Serial: `speech playback started after … ms of buffering`, then `speech finished: … s, 0 underruns, 0 lost frames, 0 overflow frames` | |
+| 4.2 | Repeat 4.1 ten times; record "audio started after" | Typical value (it includes rendering the speech on the phone) | |
+| 4.3 | Tap the glasses button | The description + distance is spoken **on the glasses**, not the phone | |
+| 4.4 | **Barge-in.** Speak test sentence, then press the button while it's speaking | Speech stops at once (serial: `speech STOPPED`), and the new photo is described | |
+| 4.5 | Walk ~5 m away during a sentence | Note underruns (serial). Short gaps of silence are acceptable; no crash, no garbage noise | |
+| 4.6 | Turn the glasses off, then Speak test sentence | Spoken **on the phone** instead, with "glasses not available; spoke on the phone" | |
+| 4.7 | Settings → Speak on: **Both** | Glasses and phone both speak (slight offset is expected) | |
+| 4.8 | Speech at volume 100 / ceiling 50 for 2 minutes of repeated sentences | No brownout reset (caps line after reconnect), no distortion | |

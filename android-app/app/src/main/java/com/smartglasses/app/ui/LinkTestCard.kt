@@ -123,6 +123,13 @@ fun LinkTestCard() {
                 }
             }) { Text("Ping") }
             OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_TOF_READ, 5)) } }) { Text("Read ToF") }
+            OutlinedButton(enabled = !running, onClick = {
+                run("Speech") {
+                    val r = app.speech.say("This is a test of the glasses speaker. A blue pen with Pentel written on it, about thirty five centimetres.")
+                    "Test sentence: spoken on ${r.where}" + (r.startedAfterMs?.let { ", audio started after $it ms" } ?: "") +
+                        (r.error?.let { " · $it" } ?: "") + " · voice ${app.speech.voiceDescription}"
+                }
+            }) { Text("Speak test sentence") }
             OutlinedButton(enabled = !running, onClick = { scope.launch { link.sendCommand(Frames.cmdU8(Frames.CMD_CAPTURE, Frames.MODE_PHONE)) } }) { Text("Capture") }
         }
         results.take(6).forEach { Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }

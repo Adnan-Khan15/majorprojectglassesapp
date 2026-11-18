@@ -2,6 +2,9 @@
 // both L and R, so whatever the amp's SD-pin channel mode is, it plays the full signal.
 // Loudness is capped by a software ceiling (default 50% of full scale) to protect the
 // 1 W / 8 ohm speaker; volume is a percentage OF that ceiling.
+//
+// Two sources: local tones/earcons, and the phone's speech streamed over AUDIO_DOWN
+// (STREAM_SPEECH, IMA ADPCM frames) into a PSRAM ring with flow-control credits.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -9,6 +12,9 @@
 namespace speaker {
 
 constexpr uint32_t SAMPLE_RATE = 16000;
+constexpr uint16_t FRAME_SAMPLES = 400;      // one AUDIO_DOWN frame = 25 ms
+constexpr uint16_t RING_FRAMES = 80;         // 2 s of speech buffered on the glasses
+constexpr uint16_t PREBUFFER_FRAMES = 16;    // 400 ms collected before playback starts
 
 enum class Earcon : uint8_t { Listening, Thinking, Error, Ready };
 
@@ -19,11 +25,15 @@ void applyVolume();
 /** Queues a tone (hz = 0 is a gap). Returns immediately. */
 void tone(uint16_t hz, uint16_t ms);
 void earcon(Earcon e);
-/** True while anything is queued, playing, or still draining from DMA. */
+/** True while a tone or speech is queued, playing, or still draining from DMA. */
 bool busy();
+/** True while a speech stream is being received or played. */
+bool speaking();
 /** Blocks until idle or the timeout passes. */
 void waitIdle(uint32_t timeoutMs);
-/** Stops tones and any stream immediately (barge-in). */
+/** Stops tones and speech immediately (barge-in). */
 void stop();
+/** AUDIO_DOWN frame for STREAM_SPEECH (called on the BLE host task; quick). */
+void onSpeechFrame(const uint8_t* frame, size_t len);
 
 }  // namespace speaker

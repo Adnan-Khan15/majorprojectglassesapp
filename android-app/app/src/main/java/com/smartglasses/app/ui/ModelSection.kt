@@ -126,7 +126,7 @@ private fun RunView(run: AssistantRun, onRetry: () -> Unit) {
             Text("\u201c${run.sentence}\u201d", style = MaterialTheme.typography.titleMedium)
             Text(timingLine(run.timing), style = MaterialTheme.typography.bodySmall)
             Text(
-                "${run.result.engine} · spoken on ${run.announcer}",
+                "${run.result.engine} · spoken on ${run.announcer}" + (run.speechError?.let { " · $it" } ?: ""),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             run.speechError?.let { Text("Couldn't speak it: $it", color = StatusColors.bad, style = MaterialTheme.typography.bodySmall) }
