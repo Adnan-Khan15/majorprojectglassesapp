@@ -99,3 +99,18 @@ Settings → Speak on: **Glasses** (default). Volume and ceiling as set in M3.1.
 | 5.9 | Glasses off; pick a gallery photo with **Try with a photo**, then ask with the phone mic | The question is answered about that photo, spoken on the phone | |
 | 5.10 | Settings → Speech recogniser: Android on-device; repeat 5.2 | Works the same (if `on-device recognition` is available on the S24) | |
 | 5.11 | **STT spike**: follow `docs/STT_SPIKE.md` (20+ clips, run, `scripts/wer.py`) | Results table filled in | |
+
+## M6: hold-to-talk on the glasses
+
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 6.1 | **Tap** (press < 0.5 s) | Same as before: photo + distance, described on the glasses. Serial: `[BTN] tap (N ms)` | |
+| 6.2 | **Hold**, wait for the rising "listening" beep, ask "What is this?", release | Two short "thinking" beeps on release, then the answer from the glasses. Card: `Heard: "what is this"`. Serial: `[MIC] stream 1: N frames sent, 0 failed` | |
+| 6.3 | Hold and start talking **before** the beep | The first words may be lost (recording starts after the beep, by design: never record while playing). Note how it feels | |
+| 6.4 | Hold for more than 10 s | Recording stops at 10 s (`question hit the 10 s cap`), the question is answered | |
+| 6.5 | Hold, say nothing, release | "I didn't catch that, please try again." spoken on the glasses | |
+| 6.6 | **Barge-in**: while an answer is being spoken, tap | Speech stops immediately; the new photo is described | |
+| 6.7 | Centre / left / not-there / safety / reading questions from 5.3–5.7, asked by **holding the glasses button** | Same results as with the phone mic | |
+| 6.8 | 10 hold-to-talk questions; export the latency CSV; `scripts/latency_report.py latency.csv --mode question` | p50/p90 for button_down → record_start → button_up → image_received → answer_complete → play_started | |
+| 6.9 | Glasses mic quality: Diagnostics → **Mic test** (record 3 s on the glasses, play back on the phone) | Speech intelligible; adjust `set micgain` if too quiet or clipping | |
+| 6.10 | Serial `h` (simulated 2 s hold) | Listening beep, 2 s recording, thinking beeps, answer | |

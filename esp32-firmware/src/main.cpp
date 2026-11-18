@@ -8,6 +8,7 @@
 #include "console.h"
 #include "glasses_frames.h"
 #include "glasses_protocol.h"
+#include "ima_adpcm.h"
 #include "ble_link.h"
 #include "mic.h"
 #include "pins.h"
@@ -31,7 +32,7 @@ static void sendCaps() {
     c.protocol = PROTOCOL_VERSION;
     c.fw_major = FW_MAJOR; c.fw_minor = FW_MINOR; c.fw_patch = FW_PATCH;
     c.features = (camera::ok() ? FEAT_CAMERA : 0) | (tof::ok() ? FEAT_TOF : 0) | (speaker::ok() ? FEAT_SPEAKER : 0) |
-                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0) | FEAT_IMG_NOTIFY | (speaker::ok() ? FEAT_SPEECH_STREAM : 0);
+                 (mic::ok() ? FEAT_MIC : 0) | (psramFound() ? FEAT_PSRAM : 0) | FEAT_IMG_NOTIFY | (speaker::ok() ? FEAT_SPEECH_STREAM : 0) | (mic::ok() ? FEAT_HOLD_TO_TALK : 0);
     c.audio_rate = speaker::SAMPLE_RATE;
     c.samples_per_frame = mic::BLOCK_SAMPLES;
     c.codec = AUDIO_CODEC_ADPCM;
@@ -114,14 +115,170 @@ static void resendLast(uint16_t imageId) {
     if (!ble::sendImage(s, IMG_FLAG_RESEND, false) && ble::connected()) ble::reset();
 }
 
-static void tap() {
+// ============================ Mic audio streaming (questions, mic test) ============================
+
+static constexpr uint32_t MAX_QUESTION_MS = 10000;   // hard cap on a hold-to-talk question
+
+struct MicStream {
+    uint8_t stream = STREAM_QUESTION;
+    ima_state_t enc = {0, 0};
+    uint16_t seq = 0;
+    uint16_t sent = 0, failed = 0, retries = 0;
+};
+static MicStream micStream;
+
+/** Mic task: one 400-sample block -> one AUDIO_UP frame (state of the encoder at frame start). */
+static void streamBlock(const int16_t* pcm, size_t n, void*) {
+    uint8_t frame[AUDIO_HDR_LEN + mic::BLOCK_SAMPLES / 2];
+    audio_header_t h = {micStream.stream, (uint8_t)(micStream.seq == 0 ? AUDIO_FLAG_START : 0), micStream.seq,
+                        micStream.enc.predictor, micStream.enc.step_index, AUDIO_CODEC_ADPCM};
+    audio_header_pack(&h, frame);
+    size_t bytes = ima_encode(&micStream.enc, pcm, n, frame + AUDIO_HDR_LEN);
+    if (ble::notifyAudio(frame, AUDIO_HDR_LEN + bytes, &micStream.retries)) micStream.sent++;
+    else micStream.failed++;  // the phone sees the sequence gap and fills silence
+    micStream.seq++;
+}
+
+static bool startMicStream(uint8_t stream) {
+    if (!mic::ok()) return false;
+    speaker::waitIdle(1500);  // never record while the speaker is playing (mic and speaker are inches apart)
+    micStream = MicStream();
+    micStream.stream = stream;
+    if (!mic::start(streamBlock, nullptr)) return false;
+    uint8_t p = stream;
+    ble::sendEvent(EVT_RECORD_START, &p, 1);
+    return true;
+}
+
+/** Stops the mic, sends a header-only END frame and RECORD_STOP. reason: 0 released, 1 time cap, 2 error, 3 cancelled. */
+static void stopMicStream(uint8_t reason) {
+    mic::stop();
+    uint8_t end[AUDIO_HDR_LEN];
+    audio_header_t h = {micStream.stream, AUDIO_FLAG_END, micStream.seq, micStream.enc.predictor, micStream.enc.step_index, AUDIO_CODEC_ADPCM};
+    audio_header_pack(&h, end);
+    ble::notifyAudio(end, sizeof end);
+    uint8_t p[4];
+    p[0] = micStream.stream;
+    put_u16(p + 1, micStream.sent);
+    p[3] = reason;
+    ble::sendEvent(EVT_RECORD_STOP, p, 4);
+    Serial.printf("[MIC] stream %u: %u frames sent, %u failed, %u buffer retries (reason %u)\n",
+                  micStream.stream, micStream.sent, micStream.failed, micStream.retries, reason);
+}
+
+// ============================ Button: tap vs hold-to-talk ============================
+//   tap  (released before hold_ms): photo + ToF -> describe            (MODE_TAP)
+//   hold (>= hold_ms): "listening" earcon, mic streams while held (max 10 s);
+//         on release: photo + ToF at release, "thinking" earcon         (MODE_QUESTION)
+//   press while speaking: speech stops at once (barge-in), then as above.
+
+enum class BtnState { Idle, Pressed, Recording };
+static BtnState btnState = BtnState::Idle;
+static uint32_t recordStartMs = 0;
+
+static void sendButtonUp(uint32_t heldMs) {
+    uint8_t p[2];
+    put_u16(p, (uint16_t)min<uint32_t>(heldMs, 65535));
+    ble::sendEvent(EVT_BUTTON_UP, p, 2);
+}
+
+static void onPress() {
     pressedAtMs = millis();
-    Serial.printf("\n[BTN] tap at %lu ms\n", (unsigned long)pressedAtMs);
+    if (speaker::busy()) {
+        Serial.println("[BTN] press during speech: barge-in, stopping playback");
+        speaker::stop();
+    }
+    Serial.printf("\n[BTN] down at %lu ms\n", (unsigned long)pressedAtMs);
     ble::sendEvent(EVT_BUTTON_DOWN);
+    btnState = BtnState::Pressed;
+}
+
+static void beginQuestion() {
+    ble::sendEvent(EVT_HOLD_DETECTED);
+    Serial.println("[BTN] hold: recording question");
+    if (!ble::connected()) { speaker::earcon(speaker::Earcon::Error); btnState = BtnState::Idle; return; }
+    speaker::earcon(speaker::Earcon::Listening);
+    if (!startMicStream(STREAM_QUESTION)) {
+        sendError(ERR_MIC, "microphone unavailable");
+        speaker::earcon(speaker::Earcon::Error);
+        btnState = BtnState::Idle;
+        return;
+    }
+    recordStartMs = millis();
+    btnState = BtnState::Recording;
+}
+
+static void endQuestion(uint8_t reason) {
+    stopMicStream(reason);
+    sendButtonUp(millis() - pressedAtMs);
+    btnState = BtnState::Idle;
+    speaker::earcon(speaker::Earcon::Thinking);
+    captureAndSend(MODE_QUESTION);  // photo at release: the camera points where the wearer now faces
+}
+
+/** Debounced level + edges. */
+static bool buttonDown() {
+    static bool stable = LOW, lastRead = LOW;
+    static uint32_t changedAt = 0;
+    bool r = digitalRead(PIN_BUTTON);
+    if (r != lastRead) { lastRead = r; changedAt = millis(); }
+    if (millis() - changedAt > DEBOUNCE_MS) stable = r;
+    return stable == HIGH;
+}
+
+static void pollButton() {
+    bool down = buttonDown();
+    uint32_t now = millis();
+    switch (btnState) {
+        case BtnState::Idle:
+            if (down) onPress();
+            break;
+        case BtnState::Pressed:
+            if (!down) {
+                sendButtonUp(now - pressedAtMs);
+                btnState = BtnState::Idle;
+                Serial.printf("[BTN] tap (%lu ms)\n", (unsigned long)(now - pressedAtMs));
+                captureAndSend(MODE_TAP);
+            } else if (now - pressedAtMs >= settings::get().holdMs) {
+                beginQuestion();
+            }
+            break;
+        case BtnState::Recording:
+            if (!down) endQuestion(0);
+            else if (now - recordStartMs >= MAX_QUESTION_MS) {
+                Serial.println("[BTN] question hit the 10 s cap");
+                endQuestion(1);
+                while (buttonDown()) delay(5);  // ignore the rest of this hold
+            }
+            break;
+    }
+}
+
+/** Serial 'p': a tap without the button. */
+static void tap() {
+    onPress();
+    sendButtonUp(0);
+    btnState = BtnState::Idle;
     captureAndSend(MODE_TAP);
 }
 
-static void simulateHold() { Serial.println("[BTN] hold-to-talk arrives in Phase 3 milestone M6"); }
+/** Serial 'h': a 2 s hold-to-talk without the button. */
+static void simulateHold() {
+    onPress();
+    beginQuestion();
+    if (btnState != BtnState::Recording) return;
+    Serial.println("[BTN] (simulated) speak now, 2 s");
+    delay(2000);
+    endQuestion(0);
+}
+
+/** Diagnostics: record N s and stream it (STREAM_MIC_TEST) for playback on the phone. */
+static void micTest(uint8_t seconds) {
+    if (mic::recording()) return;
+    if (!startMicStream(STREAM_MIC_TEST)) { sendError(ERR_MIC, "microphone unavailable"); return; }
+    delay(min<uint32_t>(seconds, 10) * 1000);
+    stopMicStream(0);
+}
 
 // ============================ Mic level monitor (Diagnostics) ============================
 
@@ -196,6 +353,9 @@ static void handleCommand(const uint8_t* c, size_t n) {
         case CMD_TOF_READ:
             if (n >= 2) sendTof(TOF_LIVE_IMAGE_ID, tof::measure(c[1]));
             break;
+        case CMD_MIC_TEST:
+            if (n >= 2) micTest(c[1]);
+            break;
         case CMD_EARCON:
             if (n >= 2 && c[1] <= 3 && !mic::recording()) speaker::earcon((speaker::Earcon)c[1]);
             break;
@@ -208,20 +368,6 @@ static void onAudioDown(const uint8_t* d, size_t len) {
     if (len < AUDIO_HDR_LEN) return;
     if (d[0] == STREAM_THROUGHPUT) throughput::onDownFrame(d, len);
     else if (d[0] == STREAM_SPEECH) speaker::onSpeechFrame(d, len);
-}
-
-// ============================ Button ============================
-
-static bool buttonPressed() {
-    static bool lastStable = LOW, lastRead = LOW;
-    static uint32_t changedAt = 0;
-    bool r = digitalRead(PIN_BUTTON);
-    if (r != lastRead) { lastRead = r; changedAt = millis(); }
-    if (millis() - changedAt > DEBOUNCE_MS && r != lastStable) {
-        lastStable = r;
-        return r == HIGH;  // rising edge = press
-    }
-    return false;
 }
 
 // ============================ Arduino ============================
@@ -250,7 +396,7 @@ void setup() {
 
 void loop() {
     if (!ble::connected()) imageViaNotify = false;  // each app session opts in again
-    if (buttonPressed()) tap();
+    pollButton();
     uint8_t cmd[24];
     if (size_t n = ble::pollCommand(cmd, sizeof cmd)) handleCommand(cmd, n);
     throughput::poll();

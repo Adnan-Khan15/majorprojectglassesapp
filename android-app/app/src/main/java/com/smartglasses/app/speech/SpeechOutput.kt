@@ -76,6 +76,8 @@ class SpeechOutput(
 
     suspend fun replay(): SpeechResult? = lastText?.let { say(it) }
 
+    fun stopPhone() = tts.stopPhone()
+
     /** Stops speech everywhere (barge-in / Stop button). */
     suspend fun stop() {
         tts.stopPhone()

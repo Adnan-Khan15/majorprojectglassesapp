@@ -2,9 +2,9 @@
 // android-app/.../ble/GlassesProtocol.kt).
 #pragma once
 
-#define FW_VERSION_STR "0.5.0"
+#define FW_VERSION_STR "0.6.0"
 #define FW_MAJOR 0
-#define FW_MINOR 5
+#define FW_MINOR 6
 #define FW_PATCH 0
 // v2: versioned 16-byte image header (id + CRC32), ToF sent as an event after the
 // image, COMMAND / EVENT / AUDIO_UP / AUDIO_DOWN. Frame layouts: lib/glasses_core/src/glasses_frames.h

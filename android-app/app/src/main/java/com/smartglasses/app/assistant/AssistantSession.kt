@@ -9,6 +9,7 @@ import com.smartglasses.app.ai.ModelState
 import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.ble.CaptureEvent
 import com.smartglasses.app.ble.Frames
+import com.smartglasses.app.ble.GlassesEvent
 import com.smartglasses.app.ble.GlassesLink
 import com.smartglasses.app.ble.LinkState
 import com.smartglasses.app.ble.TofReading
@@ -149,8 +150,28 @@ class AssistantSession(
         length = settings.answerLength.value,
     )
 
+    /** Board-side moments (button, recording, capture) seen before the photo header creates the timeline. */
+    private val boardMarks = java.util.concurrent.ConcurrentHashMap<Stage, Long>()
+
     fun start() {
         scope.launch { link.captures.collect(::onCapture) }
+        scope.launch {
+            link.events.collect { e ->
+                val now = SystemClock.elapsedRealtime()
+                when (e) {
+                    is GlassesEvent.ButtonDown -> {
+                        boardMarks.clear(); boardMarks[Stage.BUTTON_DOWN] = now
+                        // Barge-in: the glasses already stopped their speaker; stop any phone speech and the old run.
+                        job?.cancel()
+                        speech.stopPhone()
+                    }
+                    is GlassesEvent.RecordStart -> boardMarks.putIfAbsent(Stage.RECORD_START, now)
+                    is GlassesEvent.ButtonUp -> boardMarks.putIfAbsent(Stage.BUTTON_UP, now)
+                    is GlassesEvent.PhotoCaptured -> boardMarks.putIfAbsent(Stage.PHOTO_CAPTURED, now)
+                    else -> Unit
+                }
+            }
+        }
     }
 
     // ---------------- inputs ----------------
@@ -161,6 +182,8 @@ class AssistantSession(
                 if (e.resend) return  // same interaction, photo coming again
                 job?.cancel()  // a new photo supersedes whatever was running
                 arriving = newTimeline(Source.GLASSES, if (e.question) "question" else "tap").apply {
+                    boardMarks.forEach { (stage, at) -> mark(stage, at) }
+                    boardMarks.clear()
                     mark(Stage.IMAGE_HEADER)
                     put("image_bytes", e.totalBytes)
                 }
@@ -233,6 +256,7 @@ class AssistantSession(
 
     /** The hold-to-talk recording finished (null = it failed). */
     fun glassesQuestionAudio(pcm: ShortArray?) {
+        pcm?.let { arriving?.mark(Stage.AUDIO_RECEIVED) ?: boardMarks.putIfAbsent(Stage.AUDIO_RECEIVED, SystemClock.elapsedRealtime()) }
         (glassesQuestion ?: CompletableDeferred<ShortArray?>().also { glassesQuestion = it }).complete(pcm)
     }
 

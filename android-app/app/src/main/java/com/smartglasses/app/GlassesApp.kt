@@ -13,6 +13,7 @@ import com.smartglasses.app.speech.GlassesSpeaker
 import com.smartglasses.app.speech.SpeechOutput
 import com.smartglasses.app.speech.TtsEngine
 import com.smartglasses.app.voice.AndroidOnDeviceStt
+import com.smartglasses.app.voice.GlassesMicReceiver
 import com.smartglasses.app.metrics.LatencyLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,8 @@ class GlassesApp : Application() {
     val latencyLog by lazy { LatencyLog(filesDir) }
     val androidStt by lazy { AndroidOnDeviceStt(this) }
     val session by lazy { AssistantSession(appScope, link, describer, speech, latencyLog, settings, androidStt) }
+    /** Hold-to-talk audio and Diagnostics mic tests from the glasses' microphone. */
+    val glassesMic by lazy { GlassesMicReceiver(link, appScope, session::glassesQuestionStarted, session::glassesQuestionAudio) }
 
     override fun onCreate() {
         super.onCreate()
@@ -60,6 +63,7 @@ class GlassesApp : Application() {
         }
         tts  // start the TTS engine now, not on the first capture
         session.start()
+        glassesMic.start()
     }
 }
 
