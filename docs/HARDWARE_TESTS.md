@@ -67,7 +67,7 @@ Record the phone model and Android version with every throughput result.
 | 3.1.6 | **Volume.** Tone 1000 Hz at volume 100 %, ceiling 50 % (the new default) | Clearly louder than M3's test tone (30 % → 50 % of full scale, +4.4 dB) | |
 | 3.1.7 | Tones 500 / 1000 / 2000 / 3000 Hz | Note which is loudest (small speakers are often weakest at low frequencies) | |
 | 3.1.8 | Ceiling 70 %, Tone 1000 Hz, then back to 50 % | Louder. Note any distortion/rattle; reconnect and check the caps line doesn't say BROWNOUT | |
-| 3.1.9 | Report amp wiring: VIN on 5V or 3V3? GAIN and SD connected where? | | |
+| 3.1.9 | Report amp wiring: VIN on 5V or 3V3? GAIN and SD connected where? | | **VIN on 5V; GAIN and SD not connected** (2026-11-18). GAIN floating = 9 dB (the chip's default). The amp plays, so the breakout must hold SD high; the firmware sends the same audio on L and R, so the SD channel mode doesn't matter |
 
 ## M4: speech on the glasses' speaker
 

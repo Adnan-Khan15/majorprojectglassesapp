@@ -13,7 +13,7 @@
 | Branch | `phase3` (pushed). `main` is still v0.3. Pull request [#1](https://github.com/Adnan-Khan15/majorprojectglassesapp/pull/1) `phase3 → main` is open; **merge after the hardware tests in §6 pass** |
 | Test builds | GitHub pre-releases: `v0.4.0-test` (M0–M3) and **`v0.6.0-test`** (M0–M8). Each has the offline **debug** APK + the merged firmware image (flash at `0x0`) |
 | AI model | Not in the APK or git. [`gemma-4-E2B-it.litertlm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm), 2,588,147,712 bytes, SHA-256 `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c`, imported in the app |
-| Tester | The user's friend (another city) has the glasses, a **Samsung Galaxy S24 (Android 17)** and a PC. He installs from the release page; results come back as screenshots |
+| Tester | The user's friend (another city) has the glasses, a **Samsung Galaxy S24 (Android 17)** and a PC. Amp: VIN 5V, GAIN and SD unconnected. He installs from the release page; results come back as screenshots |
 | Verified on hardware | **v0.4.0-test only (M0–M3), 2026-11-18.** Protocol v2 handshake; tap → photo + ToF → spoken sentence with distance; ToF overlap; live ToF; throughput 66.8 KB/s up / 48.5 KB/s down, 0 loss. Test tone audible but very quiet |
 | Not yet verified | Everything after M3: fast photos (M3.1), speech on the glasses (M4), voice questions (M5), hold-to-talk (M6), new UI (M7). **Implemented, awaiting hardware verification** |
 | Automated tests | 64 Android unit tests, 10 firmware native tests, 4 Python tests, all passing. The offline APKs are checked for network permissions by `scripts/check-apk-permissions.sh` (pass) |
@@ -223,7 +223,7 @@ HOLD board: BUTTON_DOWN → HOLD_DETECTED → earcon → RECORD_START → mic AD
 Record phone, Android version and firmware version with every result. Update `HARDWARE_TESTS.md` and §1 of this file.
 
 ### 6.2 Open questions for the user
-1. MAX98357A **VIN / GAIN / SD** wiring (decides how loud it can safely go).
+1. ~~MAX98357A wiring~~ **Answered: VIN on 5V; GAIN and SD not connected** (GAIN floating = 9 dB). If speech is still too quiet at volume 100 % / ceiling 50 %: first try ceiling 70 % in the app; only then GAIN → GND (12 dB, +3 dB), keeping the ceiling at 50 %. Never tie SD to GND (that shuts the amp down).
 2. Keep the status LED on GPIO21? (Default yes.)
 3. ~~Target phone~~: Galaxy S24, Android 17.
 4. `offline` as the default release flavor? (Default yes; releases ship offline.)
