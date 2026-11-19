@@ -3,6 +3,7 @@ package com.smartglasses.app.speech
 import android.os.SystemClock
 import android.util.Log
 import com.smartglasses.app.audio.Resampler
+import com.smartglasses.app.audio.SpeechLoudness
 import com.smartglasses.app.ble.Frames
 import com.smartglasses.app.ble.GlassesLink
 import com.smartglasses.app.ble.LinkState
@@ -50,7 +51,10 @@ class SpeechOutput(
             coroutineScope {
                 val phoneJob = if (want == SpeakOn.BOTH) async { runCatching { tts.speakOnPhone(text) } } else null
                 val pcm = tts.synthesize(text)
-                val pcm16 = Resampler.resample(pcm.samples, pcm.sampleRate, 16000)
+                val resampled = Resampler.resample(pcm.samples, pcm.sampleRate, 16000)
+                // Small speaker: make speech loud and clear (see SpeechLoudness). The glasses'
+                // volume ceiling still applies on top.
+                val pcm16 = if (settings.speechBoost.value) SpeechLoudness.process(resampled) else resampled
                 timeline?.mark(Stage.TTS_READY)
                 val startedAt = glasses.play(pcm16)
                 timeline?.mark(Stage.PLAY_STARTED, startedAt)

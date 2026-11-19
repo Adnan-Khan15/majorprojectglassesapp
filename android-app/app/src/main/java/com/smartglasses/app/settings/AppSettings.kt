@@ -44,6 +44,8 @@ class AppSettings(private val prefs: SharedPreferences) {
     /** % of full scale; above 50 the UI warns (1 W / 8 ohm speaker). */
     val glassesCeiling = int("glasses_ceiling", 50)
     val speechRate = float("speech_rate", 1.0f)
+    /** Compress + normalise speech for the glasses' small speaker (much louder at the same ceiling). */
+    val speechBoost = bool("speech_boost", true)
     val units = enum("units", Units.METRIC)
     val answerLength = enum("answer_length", AnswerLength.BRIEF)
     val holdMs = int("hold_ms", 500)

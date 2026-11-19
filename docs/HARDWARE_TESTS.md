@@ -129,3 +129,25 @@ Settings → Speak on: **Glasses** (default). Volume and ceiling as set in M3.1.
 | 7.8 | **ToF calibration**: Diagnostics walk-through at 20 / 50 / 100 cm with a tape measure, Save | Fit line shown (scale, offset, worst error); later distances use it (History shows the raw median; the spoken distance is calibrated) | |
 | 7.9 | Announce status on: switch the glasses off and on | "Glasses disconnected." (phone) … "Glasses connected." | |
 | 7.10 | Dark mode / large system font | Readable, nothing cut off | |
+
+## Results: v0.6.0-test (tester report, 2026-11-19, Galaxy S24 / Android 17, amp VIN 5V, GAIN + SD unconnected)
+
+| Area | Reported |
+|---|---|
+| Glasses mic (mic test) | Works |
+| Tones 500–3000 Hz | Work |
+| Speak test sentence | Works, **very low volume** |
+| Distance reading (Diagnostics live) | Works |
+| Bluetooth throughput | Works (numbers not reported) |
+| Tap → spoken answer on the glasses | Works, **speaker too soft** |
+| Hold-to-talk question → answer | Works; **~8 s until the answer** (latency CSV not yet exported) |
+
+Follow-up in v0.6.1-test: speech loudness processing on the phone (high-pass 300 Hz, compression, normalisation, soft limiter; Settings → Boost speech loudness, on by default). On a synthetic speech-like signal it lifts RMS to −11 dBFS before the glasses' ceiling (+5.8 to +13.2 dB depending on input level); the real gain depends on the TTS engine's output level and must be heard on the glasses.
+
+### v0.6.1-test checks
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 6.1.1 | Diagnostics → Speak test sentence, Boost ON vs OFF (Settings) | ON is clearly louder, no crackle or distortion | |
+| 6.1.2 | If still too soft: Settings → ceiling 70 % | Louder; no distortion; no BROWNOUT on the Glasses chip after reconnect | |
+| 6.1.3 | If still too soft: amp GAIN pin → GND (12 dB), ceiling back to 50 % | Louder by ~3 dB | |
+| 6.1.4 | Export Diagnostics → Latency log after 10 hold-to-talk questions; send the CSV | Breakdown of the ~8 s (photo, model, speech) | |
