@@ -77,6 +77,8 @@ scripts/fetch-model.sh --push   # download + verify once, then adb push to the a
 3. Plug the board in with a USB-C **data** cable (hold **B/BOOT** while plugging in if it isn't detected), then **Connect**.
 4. Flash address **`0x0`**, choose the file, **Program**, then press **R/RESET**.
 
+**Or with the Arduino IDE:** open [`esp32-firmware/arduino/SmartGlasses/SmartGlasses.ino`](esp32-firmware/arduino/SmartGlasses). Its [README](esp32-firmware/arduino/SmartGlasses/README.md) lists the exact setup: esp32 core **2.0.17**, libraries NimBLE-Arduino + Pololu VL53L0X, board XIAO_ESP32S3, **PSRAM: OPI PSRAM**, USB CDC On Boot: Enabled.
+
 The firmware and the app go together: install both from the same release.
 
 ---
@@ -147,6 +149,7 @@ cd android-app
 cd esp32-firmware
 pio run -t upload -t monitor            # build, flash, serial monitor at 115200
 pio test -e native                      # host tests: ADPCM, CRC-32, ToF filter, frame layouts
+python3 ../scripts/make_arduino_sketch.py   # regenerate the Arduino IDE sketch after ANY firmware change
 
 # Scripts
 python3 -m unittest discover -s scripts/tests

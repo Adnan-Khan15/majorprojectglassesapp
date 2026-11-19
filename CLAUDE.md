@@ -22,6 +22,7 @@ cd esp32-firmware && pio test -e native # host tests of lib/glasses_core (ADPCM,
 - **Evidence rule.** Anything that touches the board, speaker, mic, BLE radio, or phone GPU is "implemented, awaiting hardware verification" until the user runs the steps in `docs/HARDWARE_TESTS.md`. Never state a measurement that wasn't taken, and never present a guessed root cause as fact (e.g. why 512-byte BLE chunks stalled, or the one-off black 3.6 KB image).
 - **The BLE contract has two copies**: `esp32-firmware/include/glasses_protocol.h` and `android-app/.../ble/GlassesProtocol.kt`. Change both together.
 - **A tap must keep working** at every commit: button → photo + distance → spoken description.
+- **Arduino IDE sketch is generated.** `esp32-firmware/arduino/SmartGlasses/` is written by `scripts/make_arduino_sketch.py` from `src/`, `include/` and `lib/glasses_core/`. Never edit it by hand; after any firmware change re-run the script (`scripts/tests/test_arduino_sketch.py` fails otherwise).
 - **The model is never bundled.** `ai/ModelStore` imports/verifies it (manifest: `app/src/main/assets/model-manifest.json`).
 - **Never commit** model files (`*.litertlm`), keystores, or `local.properties`.
 - One commit per milestone on feature branches; delete dead code rather than keeping two paths.
