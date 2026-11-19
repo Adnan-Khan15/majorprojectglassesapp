@@ -104,6 +104,7 @@ fun SettingsScreen() {
                 Slider(value = rate, valueRange = 0.6f..1.6f, steps = 9, onValueChange = { s.speechRate.set((it * 10).toInt() / 10f) },
                     modifier = Modifier.semantics { contentDescription = "Speech rate %.1f".format(rate) })
             }
+            Toggle("Boost speech loudness", "Makes speech on the glasses' small speaker much louder and clearer (recommended)", s.speechBoost)
             Toggle("Announce status", "Say \"glasses connected\", \"AI ready\" and similar out loud", s.announceStates)
         }
 
