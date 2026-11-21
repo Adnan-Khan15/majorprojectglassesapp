@@ -15,10 +15,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
-    <!-- Package visibility: lets the app find the phone's on-device speech recogniser. -->
+    <!-- Package visibility (Android 11+): lets the app find the phone's on-device speech
+         recogniser and its text-to-speech engines. -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
 

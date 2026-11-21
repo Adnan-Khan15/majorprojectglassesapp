@@ -75,7 +75,7 @@ class SpeechOutput(
         timeline?.mark(Stage.PLAY_STARTED, t0 + ms)
         SpeechResult("phone", SystemClock.elapsedRealtime() - t0, note)
     } catch (e: Exception) {
-        SpeechResult("nowhere", null, "speech failed: ${e.message}")
+        SpeechResult("nowhere", null, "speech failed: ${e.message}" + (note?.let { "; before that: $it" } ?: ""))
     }
 
     suspend fun replay(): SpeechResult? = lastText?.let { say(it) }
