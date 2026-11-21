@@ -11,6 +11,8 @@ enum class AnswerLength { BRIEF, DETAILED }
 /** Which of the model's 3x3 grid cells count as "in the ToF cone" (see docs/TOF_TEST_PROTOCOL.md). */
 enum class DistanceRegion { CENTER_ONLY, CENTER_COLUMN }
 enum class SttEngine { GEMMA_AUDIO, ANDROID_ON_DEVICE }
+/** Clockwise rotation that makes the glasses' photos upright (depends on how the camera is mounted). */
+enum class CameraRotation(val degrees: Int) { NONE(0), CW_90(90), CW_180(180), CW_270(270) }
 
 /** One persisted setting, exposed as a StateFlow for Compose. */
 class Pref<T>(
@@ -59,4 +61,6 @@ class AppSettings(private val prefs: SharedPreferences) {
     val announceStates = bool("announce_states", true)
     val downloadWifiOnly = bool("download_wifi_only", true)
     val sttEngine = enum("stt_engine", SttEngine.GEMMA_AUDIO)
+    /** The camera is mounted on its side on the glasses: photos arrive rotated 90° anticlockwise. */
+    val cameraRotation = enum("camera_rotation", CameraRotation.CW_90)
 }

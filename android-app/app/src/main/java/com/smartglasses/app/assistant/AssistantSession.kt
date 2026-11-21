@@ -6,6 +6,7 @@ import android.util.Log
 import com.smartglasses.app.ai.AnswerComposer
 import com.smartglasses.app.ai.ComposeSettings
 import com.smartglasses.app.ai.ModelState
+import com.smartglasses.app.ai.PhotoRotation
 import com.smartglasses.app.ai.SceneDescriber
 import com.smartglasses.app.ble.CaptureEvent
 import com.smartglasses.app.ble.Frames
@@ -197,8 +198,10 @@ class AssistantSession(
                 arriving = null
                 t.mark(Stage.IMAGE_RECEIVED)
                 t.put("transfer_kbps", "%.1f".format(Locale.US, e.jpeg.size / 1.024 / e.transferMs.coerceAtLeast(1)))
-                lastPhoto = e.jpeg
-                onGlassesPhoto(e, t)
+                // The camera is mounted on its side: make the photo upright before anything looks at it.
+                val upright = e.copy(jpeg = PhotoRotation.rotateJpeg(e.jpeg, settings.cameraRotation.value.degrees))
+                lastPhoto = upright.jpeg
+                onGlassesPhoto(upright, t)
             }
             is CaptureEvent.Failed -> {
                 arriving?.let { finish(it, Mode.TAP, Source.GLASSES, error = e.reason, outcome = "transfer_failed") }

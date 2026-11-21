@@ -30,6 +30,7 @@ import com.smartglasses.app.ai.ModelDownloader
 import com.smartglasses.app.ble.Frames
 import com.smartglasses.app.glassesApp
 import com.smartglasses.app.settings.AnswerLength
+import com.smartglasses.app.settings.CameraRotation
 import com.smartglasses.app.settings.DistanceRegion
 import com.smartglasses.app.settings.Pref
 import com.smartglasses.app.settings.SpeakOn
@@ -122,6 +123,12 @@ fun SettingsScreen() {
             val sc by s.tofScale.state.collectAsStateWithLifecycle()
             Text("Distance calibration: scale %.3f, offset %d mm (set it in Diagnostics → ToF calibration)".format(sc, off),
                 style = MaterialTheme.typography.bodySmall)
+        }
+
+        Section("Camera") {
+            Choice("Rotate photos from the glasses", s.cameraRotation, listOf(
+                CameraRotation.NONE to "None", CameraRotation.CW_90 to "90° clockwise",
+                CameraRotation.CW_180 to "180°", CameraRotation.CW_270 to "90° anticlockwise"))
         }
 
         Section("Glasses link") {
